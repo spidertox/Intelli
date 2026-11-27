@@ -88,10 +88,10 @@ fun X11DesktopScreen(cardBg: Color, cardBorder: BorderStroke, onOpenAdbConnect: 
             return@Column
         }
 
-        // Step 1: the Termux:X11 app (shows the desktop)
+        // Step 1: the Termux:X12 app (shows the desktop)
         val app = state.app
         StepCard(
-            1, "Termux:X11 app",
+            1, "Termux:X12 app",
             when {
                 app == null -> null
                 state.appOk -> "Installed"
@@ -102,14 +102,14 @@ fun X11DesktopScreen(cardBg: Color, cardBorder: BorderStroke, onOpenAdbConnect: 
         ) {
             when {
                 app == null -> {
-                    Hint("INTELLI's own build of Termux:X11, the app that shows the desktop. It runs inside INTELLI, so Android keeps the desktop running at full speed while you use it.")
+                    Hint("INTELLI's own build of Termux:X12, the app that shows the desktop. It runs inside INTELLI, so Android keeps the desktop running at full speed while you use it.")
                     Button(enabled = !busy, onClick = X11DesktopManager::installApp) {
                         Icon(Icons.Outlined.Download, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Download & install")
                     }
                 }
                 state.appOk -> {
                     Mono(
-                        "Termux:X11 ${app.versionName ?: ""}".trim() + "\n" + when {
+                        "Termux:X12 ${app.versionName ?: ""}".trim() + "\n" + when {
                             app.sameProcess -> "INTELLI's build, runs inside INTELLI"
                             app.intelliBuild -> "INTELLI's build"
                             else -> "Official build"
@@ -119,12 +119,12 @@ fun X11DesktopScreen(cardBg: Color, cardBorder: BorderStroke, onOpenAdbConnect: 
                 }
                 else -> {
                     Text(
-                        if (app.intelliBuild) "This Termux:X11 doesn't share INTELLI's UID, so it can't run inside INTELLI. Uninstall it, then install it again."
-                        else "The official Termux:X11 is installed. It can't run inside INTELLI, and Android won't install INTELLI's build over it (they are signed differently). Uninstall it first, then install INTELLI's build.",
+                        if (app.intelliBuild) "This Termux:X12 doesn't share INTELLI's UID, so it can't run inside INTELLI. Uninstall it, then install it again."
+                        else "A conflicting Termux:X12 build is installed. It can't run inside INTELLI, and Android won't install INTELLI's build over it (they are signed differently). Uninstall it first, then install INTELLI's build.",
                         fontSize = 12.5.sp, color = MaterialTheme.colorScheme.error
                     )
                     Button(enabled = !busy, onClick = { X11DesktopManager.uninstallApp(context) }) {
-                        Icon(Icons.Outlined.Delete, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Uninstall Termux:X11")
+                        Icon(Icons.Outlined.Delete, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Uninstall Termux:X12")
                     }
                 }
             }
@@ -146,10 +146,10 @@ fun X11DesktopScreen(cardBg: Color, cardBorder: BorderStroke, onOpenAdbConnect: 
             cardBg, cardBorder,
             badgeColor = if (state.companionOk) QuotaGreen else Amber
         ) {
-            Hint("The terminal part: the termux-x11 command that starts the X server. ${state.neededCompanion} goes with ${if (app == null) "the Termux:X11 above" else "the installed Termux:X11"}.")
+            Hint("The terminal part: the termux-x11 command that starts the X server. ${state.neededCompanion} goes with ${if (app == null) "the Termux:X12 above" else "the installed Termux:X12"}.")
             if (state.companion != null && !state.companionOk) {
                 Text(
-                    "${state.companion} is installed, but this Termux:X11 needs ${state.neededCompanion}. Installing replaces it.",
+                    "${state.companion} is installed, but this Termux:X12 needs ${state.neededCompanion}. Installing replaces it.",
                     fontSize = 12.5.sp, color = Amber
                 )
             }
@@ -317,11 +317,11 @@ private fun ManualSetupCard(desktop: Desktop, cardBg: Color, cardBorder: BorderS
     var open by remember { mutableStateOf(false) }
     val start = "termux-x11 :0 -xstartup \"${desktop.startCommand}\""
     val commands = listOf(
-        "1. Install antigem-termux-x11-sharedUid.apk and download antigem-termux-x11-*-all.deb from ${X11DesktopManager.FORK_RELEASES_PAGE}" to null,
+        "1. Install intelli-termux-x12-sharedUid.apk and download intelli-termux-x12-*-all.deb from ${X11DesktopManager.FORK_RELEASES_PAGE}" to null,
         "2. Enable x11-repo" to "pkg install x11-repo",
-        "3. Install the termux-x11 command (in the folder with the .deb)" to "apt install ./antigem-termux-x11-*-all.deb",
+        "3. Install the termux-x11 command (in the folder with the .deb)" to "apt install ./intelli-termux-x12-*-all.deb",
         "4. Install a desktop" to "pkg install dbus ${desktop.packages}",
-        "5. Start it, then open Termux:X11" to start
+        "5. Start it, then open Termux:X12" to start
     )
     Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = cardBg), border = cardBorder) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {

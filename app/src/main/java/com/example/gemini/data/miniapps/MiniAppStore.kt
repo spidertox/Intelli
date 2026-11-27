@@ -18,13 +18,13 @@ import java.util.concurrent.TimeUnit
  * doesn't match is refused before the install screen. The packages themselves are installed like any other .agapp.
  */
 object MiniAppStore {
-    const val REPO = "Santoshkurmi/antigem_mini_apps"
+    const val REPO = "spidertox/Intelli-mini-apps"
     const val INDEX = "intelli-mini-apps.json"
     /** HEAD = the repository's default branch, whatever it is called. */
     const val CATALOG = "https://raw.githubusercontent.com/$REPO/HEAD/$INDEX"
     const val PAGE = "https://github.com/$REPO"
     /** SHA-256 of the key that signs this repository's apps (the official ones). */
-    const val SIGNER = "57b8a7a0466f5dda67b1082e15305d5e3f3156e10ee9e9d0f7af6a505af53bed"
+    const val SIGNER = "12a7e9c208475fed245c42d23ea3df7dcb7005d8a15a7cc69d0e7256648b640f"
 
     /** Installed from a package signed with the official key, and its files still match the signature. */
     fun isOfficial(app: MiniApp) = app.signed && !app.tampered && app.signer.equals(SIGNER, ignoreCase = true)

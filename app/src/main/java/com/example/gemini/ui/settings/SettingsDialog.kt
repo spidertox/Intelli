@@ -1144,6 +1144,14 @@ private fun rememberDeviceToolRows(onNavigate: (SettingsSection) -> Unit): Devic
     )
 }
 
+private const val TERMUX_API_RELEASES_URL = "https://github.com/spidertox/Termux-api/releases"
+
+private fun openTermuxApiReleases(context: Context) {
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(TERMUX_API_RELEASES_URL)))
+    } catch (_: Exception) {}
+}
+
 /**
  * Settings → Termux Support → Termux:API: how termux-api commands are handled, by Intelli's built-in
  * handlers or by the external Termux:API companion app (that one needs the Shared UID build).
@@ -1304,12 +1312,7 @@ private fun TermuxApiSubScreen(cardBg: Color, cardBorder: BorderStroke) {
                                     }
 
                                     OutlinedButton(
-                                        onClick = {
-                                            try {
-                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/santoshkurmi/termux-api/releases"))
-                                                context.startActivity(intent)
-                                            } catch (_: Exception) {}
-                                        },
+                                        onClick = { openTermuxApiReleases(context) },
                                         shape = RoundedCornerShape(8.dp),
                                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
@@ -1391,12 +1394,7 @@ private fun TermuxApiSubScreen(cardBg: Color, cardBorder: BorderStroke) {
             dismissButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
-                        onClick = {
-                            try {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/santoshkurmi/termux-api/releases"))
-                                context.startActivity(intent)
-                            } catch (_: Exception) {}
-                        },
+                        onClick = { openTermuxApiReleases(context) },
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Text("Get APK")

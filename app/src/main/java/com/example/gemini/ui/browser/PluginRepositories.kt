@@ -59,8 +59,7 @@ object PluginRepositories {
      * repository added later still reaches users who already got the earlier ones. A removed one stays removed.
      */
     private val DEFAULT_REPOS = listOf(
-        "dipeshkrydv/antigem_plugins" to "default_repo_added",
-        "Santoshkurmi/antigem_plugins" to "default_repo_added_santoshkurmi"
+        "spidertox/Intelli-plugins" to "default_repo_added_spidertox_intelli"
     )
     private val NAME = "[A-Za-z0-9_.-]+"
 

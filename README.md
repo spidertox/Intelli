@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/License-GPLv3-blue?style=flat-square)](LICENSE)
 [![Releases](https://img.shields.io/github/v/release/spidertox/Intelli?style=flat-square&label=Download)](https://github.com/spidertox/Intelli/releases)
 
-[Download](https://github.com/spidertox/Intelli/releases) · [Website](https://spidertox.github.io/Intelli/) · [VS Code extension](https://github.com/Santoshkurmi/antigem_vscode_extension) · [Plugin SDK](extension_docs/README.md) · [User Guide](user_docs/README.md) · [WhatsApp community](https://chat.whatsapp.com/IGQX8q9zSVV0RarG70sclV?s=cl&p=a&mlu=4&ilr=4)
+[Download](https://github.com/spidertox/Intelli/releases) · [Website](https://spidertox.github.io/Intelli/) · [VS Code extension](https://github.com/spidertox/Intelli-vscode-extension) · [Plugin SDK](extension_docs/README.md) · [User Guide](user_docs/README.md) · [WhatsApp community](https://chat.whatsapp.com/IGQX8q9zSVV0RarG70sclV?s=cl&p=a&mlu=4&ilr=4)
 
 <br>
 
@@ -191,7 +191,7 @@ Each one is a one-tap preset in **Settings → MCP Servers**, for every agent.
 - Multiple sessions, themes, font sizes, quick keys and text selection.
 - Background service for long-running builds, servers and scripts.
 - **ADB Connect**: connects the terminal's `adb` to the same phone over Wireless debugging, with pairing from a notification and automatic reconnects.
-- **Linux desktop (X11)**: run an XFCE or LXQt desktop and Linux GUI apps through Termux:X11, set up from **Settings → Termux Support → X11 Desktop** (Shared UID build). See [X11 desktop](#x11-desktop).
+- **Linux desktop (X11)**: run an XFCE or LXQt desktop and Linux GUI apps through Termux:X12, set up from **Settings → Termux Support → X11 Desktop** (Shared UID build). See [X11 desktop](#x11-desktop).
 
 ### Code editor and Git
 - Syntax highlighting for Python, Go, Kotlin, Java, JS/TS, Rust, C/C++, HTML/CSS, JSON, YAML, Markdown and more.
@@ -205,7 +205,7 @@ Each one is a one-tap preset in **Settings → MCP Servers**, for every agent.
 - Desktop and mobile modes, a steady browser identity that keeps Google sign-in working, and built-in Eruda DevTools.
 
 ### Connect to PC (with Intelli for VS Code)
-Use the agents running on your PC from your phone. [Intelli for VS Code](https://github.com/Santoshkurmi/antigem_vscode_extension) runs them on the PC, and the app becomes a second screen for the same chats.
+Use the agents running on your PC from your phone. [Intelli for VS Code](https://github.com/spidertox/Intelli-vscode-extension) runs them on the PC, and the app becomes a second screen for the same chats.
 - **Same chats on both:** start a chat in VS Code and continue it on the phone, or the other way round. Replies stream live on both, and every agent (Antigravity, Claude Code, Codex, OpenCode) works, with its subagents, images and files.
 - **Pair once, no typing of addresses:** in VS Code open **Settings → Connect phone → Start pairing**. On the phone, turn on **Settings → Connect to PC**, tap **Add a PC**, pick the PC from **Nearby PCs** and type the 6-digit code it shows. If the PC is not listed (guest Wi-Fi), type the address shown on the PC.
 - **Switch in one tap:** the PC button in the side bar lists your paired PCs; pick one, or go back to **Use this phone**. Several PCs can be paired.
@@ -246,7 +246,7 @@ Get the latest APK from [Releases](https://github.com/spidertox/Intelli/releases
 
 Termux packages are compiled for the fixed path `/data/data/com.termux/files/usr`. An app with any other package name cannot run them directly. It would have to use **proot** to fake that path, and proot slows down every program, or rebuild every package for a new path.
 
-With the package name `com.termux`, Intelli can install the official Termux bootstrap and use the official Termux package repositories, and everything runs at full native speed. This is the only reason for the name.
+With the package name `com.termux`, Intelli can use the [Intelli Termux bootstrap](https://github.com/spidertox/Termux-botstrap) alongside the official Termux bootstrap and package repositories, so everything runs at full native speed. This is the only reason for the name.
 
 ### This is not a Termux fork
 
@@ -273,7 +273,7 @@ Intelli has essential Termux:API commands built in with zero setup:
 
 For advanced hardware APIs (such as `termux-location`, `termux-camera-photo`, `termux-sensor`, `termux-sms-*`, `termux-wifi-*`), install the matching signed companion app:
 
-👉 **[Download Intelli Termux:API Companion App](https://github.com/Santoshkurmi/termux-api/releases)**
+👉 **[Download Intelli Termux:API Companion App](https://github.com/spidertox/Termux-api/releases)**
 
 > [!IMPORTANT]
 > **Intelli Variant Requirement for Termux:API:**
@@ -282,26 +282,26 @@ For advanced hardware APIs (such as `termux-location`, `termux-camera-photo`, `t
 > - You can check your current variant in Intelli under **Settings → About & Info** (shows *Shared UID Build* or *Standalone Build*).
 
 **How to enable:**
-1. Install the companion APK from the [releases page](https://github.com/Santoshkurmi/termux-api/releases).
+1. Install the companion APK from the [releases page](https://github.com/spidertox/Termux-api/releases).
 2. In Intelli, go to **Settings → Termux Support → Termux:API** and select **External Termux:API App**.
 3. Tap **Reinstall Package Now** (or run `pkg reinstall termux-api` in the terminal) to restore the official dispatcher binary.
 
 #### X11 desktop
 
-Intelli can run a Linux desktop (XFCE or LXQt) with [Termux:X11](https://github.com/termux/termux-x11). It uses Intelli's own build of Termux:X11, signed to share the `com.termux` UID, so the desktop runs inside Intelli's process and Android doesn't slow it down or stop it while you use it. This needs the **Shared UID build**.
+Intelli can run a Linux desktop (XFCE or LXQt) with [Termux:X12](https://github.com/spidertox/Termux-x12). It uses Intelli's own build of Termux:X12 (`com.intelli.x12`), signed to share the `com.termux` UID, so the desktop runs inside Intelli's process and Android doesn't slow it down or stop it while you use it. This needs the **Shared UID build**.
 
-Go to **Settings → Termux Support → X11 Desktop** and follow the steps: install the Termux:X11 app, the `termux-x11` command and a desktop, then tap **Start**.
+Go to **Settings → Termux Support → X11 Desktop** and follow the steps: install the Termux:X12 app, the `termux-x11` command and a desktop, then tap **Start**.
 
-To set it up by hand instead, get `antigem-termux-x11-sharedUid.apk` and `antigem-termux-x11-*-all.deb` from the [Intelli Termux:X11 releases](https://github.com/Santoshkurmi/termux-x11/releases/latest), install the APK, and run:
+To set it up by hand instead, get `intelli-termux-x12-sharedUid.apk` and `intelli-termux-x12-*-all.deb` from the [Intelli Termux:X12 releases](https://github.com/spidertox/Termux-x12/releases/latest), install the APK, and run:
 
 ```bash
 pkg install x11-repo
-apt install ./antigem-termux-x11-*-all.deb
+apt install ./intelli-termux-x12-*-all.deb
 pkg install dbus xfce4
 termux-x11 :0 -xstartup "dbus-launch --exit-with-session xfce4-session"
 ```
 
-Then open Termux:X11. Don't install `termux-x11-nightly` from x11-repo: it only works with the official Termux:X11 app.
+Then open Termux:X12. Don't install `termux-x11-nightly` from x11-repo: it only works with the official Termux:X11 app.
 
 ---
 
@@ -437,9 +437,9 @@ Intelli comes in parts that link to each other:
 | Project | What it is | Repository |
 |---|---|---|
 | **Intelli** (Android app) | The coding agents, a Linux terminal, an editor and a browser on your phone. With **Connect to PC** it also uses the agents of a PC that runs Intelli for VS Code. | [spidertox/Intelli](https://github.com/spidertox/Intelli) |
-| **Intelli for VS Code** | The same agents and chat in a VS Code sidebar. Its **Connect phone** lets the app on your phone use them. | [Santoshkurmi/antigem_vscode_extension](https://github.com/Santoshkurmi/antigem_vscode_extension) · install: [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=santoshkurmi.intelli-vscode-extension), [Open VSX](https://open-vsx.org/extension/santoshkurmi/antigem-vscode-extension) |
-| **Intelli Browser Bridge** (Chrome extension) | Lets agents in Intelli for VS Code use your real Chrome. Not needed by the Android app, which has its own browser. | [Santoshkurmi/antigem-browser-extension](https://github.com/Santoshkurmi/antigem-browser-extension) · not in the Chrome Web Store yet: installed with *Load unpacked* from Intelli for VS Code |
-| **Intelli mini apps** | The official mini apps (Habits, Pocket Notes, Sky, Gallery, Focus, Dev Toolbox, Explorer, Showcase), installed from **Mini Apps → Get apps**. Also the guide to building and publishing your own: real app sources using every SDK feature, signed `.agapp` packages, the catalog format and the `agapp.mjs publish` tool. | [Santoshkurmi/antigem_mini_apps](https://github.com/Santoshkurmi/antigem_mini_apps) |
+| **Intelli for VS Code** | The same agents and chat in a VS Code sidebar. Its **Connect phone** lets the app on your phone use them. | [spidertox/Intelli-vscode-extension](https://github.com/spidertox/Intelli-vscode-extension) |
+| **Intelli Browser Bridge** (Chrome extension) | Lets agents in Intelli for VS Code use your real Chrome. Not needed by the Android app, which has its own browser. | [spidertox/Intelli-browser-extension](https://github.com/spidertox/Intelli-browser-extension) · install: [Chrome Web Store](https://chromewebstore.google.com/detail/intelli-browser-bridge/kbdjcdlfeoijcchepbldpldeaeijgibi) (or *Load unpacked* from Intelli for VS Code) |
+| **Intelli mini apps** | The official mini apps (Habits, Pocket Notes, Sky, Gallery, Focus, Dev Toolbox, Explorer, Showcase), installed from **Mini Apps → Get apps**. Also the guide to building and publishing your own: real app sources using every SDK feature, signed `.agapp` packages, the catalog format and the `agapp.mjs publish` tool. | [spidertox/Intelli-mini-apps](https://github.com/spidertox/Intelli-mini-apps) |
 This is not polished app they are only for showcase only not for use and will be removed in future.
 ## Contributing
 

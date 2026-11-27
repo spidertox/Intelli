@@ -780,72 +780,52 @@ object LocalEnvironmentManager {
         info
     }
 
-    private fun resolveBootstrapUrls(arch: String): List<String> {
-        val urls = mutableListOf<String>()
-
-        // 1. Query GitHub API for latest release assets dynamically
+    private fun appendBootstrapUrlsFromApi(apiUrl: String, arch: String, urls: MutableList<String>, isArray: Boolean) {
         try {
             val apiRequest = Request.Builder()
-                .url("https://api.github.com/repos/termux/termux-packages/releases/latest")
+                .url(apiUrl)
                 .header("User-Agent", "GeminiApp-BootstrapInstaller/1.0")
                 .header("Accept", "application/vnd.github.v3+json")
                 .build()
 
             httpClient.newCall(apiRequest).execute().use { response ->
-                if (response.isSuccessful) {
-                    val bodyString = response.body?.string()
-                    if (!bodyString.isNullOrBlank()) {
-                        val json = JSONObject(bodyString)
-                        val assets = json.optJSONArray("assets")
-                        if (assets != null) {
-                            for (i in 0 until assets.length()) {
-                                val asset = assets.getJSONObject(i)
-                                val name = asset.optString("name", "")
-                                val downloadUrl = asset.optString("browser_download_url", "")
-                                if (name == "bootstrap-$arch.zip" && downloadUrl.isNotBlank()) {
-                                    urls.add(downloadUrl)
-                                }
-                            }
+                if (!response.isSuccessful) return
+                val bodyString = response.body?.string()
+                if (bodyString.isNullOrBlank()) return
+
+                val targetAsset = "bootstrap-$arch.zip"
+                val releases = if (isArray) JSONArray(bodyString) else JSONArray().put(JSONObject(bodyString))
+                for (r in 0 until releases.length()) {
+                    val assets = releases.getJSONObject(r).optJSONArray("assets") ?: continue
+                    for (i in 0 until assets.length()) {
+                        val asset = assets.getJSONObject(i)
+                        val name = asset.optString("name", "")
+                        val downloadUrl = asset.optString("browser_download_url", "")
+                        if (name == targetAsset && downloadUrl.isNotBlank() && !urls.contains(downloadUrl)) {
+                            urls.add(downloadUrl)
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to query GitHub API latest release: ${e.message}")
+            Log.w(TAG, "Failed to query GitHub API ($apiUrl): ${e.message}")
+        }
+    }
+
+    private fun resolveBootstrapUrls(arch: String): List<String> {
+        val urls = mutableListOf<String>()
+
+        // 1. Prefer Intelli's own Termux bootstrap releases (spidertox/Termux-botstrap)
+        appendBootstrapUrlsFromApi("https://api.github.com/repos/spidertox/Termux-botstrap/releases/latest", arch, urls, isArray = false)
+        if (urls.isEmpty()) {
+            appendBootstrapUrlsFromApi("https://api.github.com/repos/spidertox/Termux-botstrap/releases?per_page=5", arch, urls, isArray = true)
         }
 
-        // 2. Query GitHub API releases list if latest didn't yield assets
-        if (urls.isEmpty()) {
-            try {
-                val apiRequest = Request.Builder()
-                    .url("https://api.github.com/repos/termux/termux-packages/releases?per_page=5")
-                    .header("User-Agent", "GeminiApp-BootstrapInstaller/1.0")
-                    .header("Accept", "application/vnd.github.v3+json")
-                    .build()
-
-                httpClient.newCall(apiRequest).execute().use { response ->
-                    if (response.isSuccessful) {
-                        val bodyString = response.body?.string()
-                        if (!bodyString.isNullOrBlank()) {
-                            val releases = JSONArray(bodyString)
-                            for (r in 0 until releases.length()) {
-                                val releaseObj = releases.getJSONObject(r)
-                                val assets = releaseObj.optJSONArray("assets") ?: continue
-                                for (i in 0 until assets.length()) {
-                                    val asset = assets.getJSONObject(i)
-                                    val name = asset.optString("name", "")
-                                    val downloadUrl = asset.optString("browser_download_url", "")
-                                    if (name == "bootstrap-$arch.zip" && downloadUrl.isNotBlank() && !urls.contains(downloadUrl)) {
-                                        urls.add(downloadUrl)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to query GitHub API releases list: ${e.message}")
-            }
+        // 2. Fallback to upstream Termux weekly bootstrap releases
+        val beforeUpstream = urls.size
+        appendBootstrapUrlsFromApi("https://api.github.com/repos/termux/termux-packages/releases/latest", arch, urls, isArray = false)
+        if (urls.size == beforeUpstream) {
+            appendBootstrapUrlsFromApi("https://api.github.com/repos/termux/termux-packages/releases?per_page=5", arch, urls, isArray = true)
         }
 
         // 3. Fallback known weekly release tags

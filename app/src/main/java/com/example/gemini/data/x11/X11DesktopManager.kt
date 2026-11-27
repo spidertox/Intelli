@@ -30,26 +30,26 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * Settings → X11 Desktop: sets up Termux:X11 (the app that shows the desktop, its companion
+ * Settings → X11 Desktop: sets up Termux:X12 (the app that shows the desktop, its companion
  * termux package with the `termux-x11` command, and a desktop such as XFCE) and starts/stops it.
  *
- * Only for the Shared UID com.termux build: it uses Intelli's own Termux:X11 build
- * (github.com/Santoshkurmi/termux-x11), signed with Intelli's key. That app joins Intelli's UID and
- * process, so Android keeps the desktop at full speed while it is on screen. Its companion package is
- * antigem-termux-x11 from the same release; the official termux-x11-nightly's loader only starts the
- * official Termux:X11, so it is replaced when found.
+ * Only for the Shared UID com.termux build: it uses Intelli's own Termux:X12 build
+ * (github.com/spidertox/Termux-x12, package com.intelli.x12), signed with Intelli's key. That app
+ * joins Intelli's UID and process, so Android keeps the desktop at full speed while it is on screen.
+ * Its companion package is intelli-termux-x12 from the same release; the official termux-x11-nightly's
+ * loader only starts the official Termux:X11, so it is replaced when found.
  */
 object X11DesktopManager {
     private const val TAG = "X11Desktop"
     private const val PREFS = "x11_desktop"
 
-    const val X11_PACKAGE = "com.termux.x11"
-    const val COMPANION_INTELLI = "antigem-termux-x11"
+    const val X11_PACKAGE = "com.intelli.x12"
+    const val COMPANION_INTELLI = "intelli-termux-x12"
     const val COMPANION_OFFICIAL = "termux-x11-nightly"
 
-    private const val FORK_REPO = "Santoshkurmi/termux-x11"
+    private const val FORK_REPO = "spidertox/Termux-x12"
     const val FORK_RELEASES_PAGE = "https://github.com/$FORK_REPO/releases/latest"
-    private const val FORK_APK_URL = "https://github.com/$FORK_REPO/releases/latest/download/antigem-termux-x11-sharedUid.apk"
+    private const val FORK_APK_URL = "https://github.com/$FORK_REPO/releases/latest/download/intelli-termux-x12-sharedUid.apk"
     private const val FORK_RELEASE_API = "https://api.github.com/repos/$FORK_REPO/releases/latest"
 
     private const val DISPLAY = ":0"
@@ -164,7 +164,7 @@ object X11DesktopManager {
         val prefix = LocalEnvironmentManager.getPrefixDir(ctx)
         val bin = LocalEnvironmentManager.getBinDir(ctx)
         val dpkgInfo = File(prefix, "var/lib/dpkg/info")
-        val companion = listOf(COMPANION_INTELLI, COMPANION_OFFICIAL).firstOrNull { File(dpkgInfo, "$it.list").exists() }
+        val companion = listOf(COMPANION_INTELLI, COMPANION_OFFICIAL, "antigem-termux-x11").firstOrNull { File(dpkgInfo, "$it.list").exists() }
             ?.takeIf { File(bin, "termux-x11").exists() }
         _state.update {
             it.copy(
@@ -205,16 +205,16 @@ object X11DesktopManager {
         pid.takeIf { argv0.startsWith("termux-x11 ") }
     }
 
-    // ---------------- step 1: the Termux:X11 app ----------------
+    // ---------------- step 1: the Termux:X12 app ----------------
 
-    /** Downloads Intelli's Termux:X11 build and opens the system installer. */
+    /** Downloads Intelli's Termux:X12 build and opens the system installer. */
     fun installApp() = runTask(Task.APP) {
         val url = FORK_APK_URL
-        appendLog("Downloading INTELLI's Termux:X11 build…")
+        appendLog("Downloading INTELLI's Termux:X12 build…")
         appendLog(url)
         val dir = File(appContext.externalCacheDir ?: appContext.cacheDir, "x11").apply { mkdirs() }
-        val apk = File(dir, "termux-x11.apk")
-        download(url, apk) { pct -> _state.update { it.copy(progress = "Downloading Termux:X11… $pct") } }
+        val apk = File(dir, "intelli-termux-x12.apk")
+        download(url, apk) { pct -> _state.update { it.copy(progress = "Downloading Termux:X12… $pct") } }
         appendLog("✓ Downloaded ${apk.length() / 1024} KB")
         val opened = withContext(Dispatchers.Main) { AppUpdateManager(appContext).installApk(apk) }
         if (opened) {
@@ -311,14 +311,14 @@ object X11DesktopManager {
     fun open(context: Context) {
         val intent = context.packageManager.getLaunchIntentForPackage(X11_PACKAGE)
         if (intent == null) {
-            report("Termux:X11 is not installed.", isError = true)
+            report("Termux:X12 is not installed.", isError = true)
             return
         }
         runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            .onFailure { report("Could not open Termux:X11: ${it.message}", isError = true) }
+            .onFailure { report("Could not open Termux:X12: ${it.message}", isError = true) }
     }
 
-    /** Closes the Termux:X11 window and stops the X server; the desktop's programs exit with it. */
+    /** Closes the Termux:X12 window and stops the X server; the desktop's programs exit with it. */
     fun stop(context: Context) = scope.launch {
         runCatching {
             context.sendBroadcast(Intent("com.termux.x11.ACTION_STOP").setPackage(X11_PACKAGE))

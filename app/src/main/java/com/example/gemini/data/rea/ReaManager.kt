@@ -32,7 +32,7 @@ import java.util.concurrent.TimeUnit
  * take apart APKs, Flutter and React Native apps and native code, in a proot-distro Ubuntu container of the
  * terminal (com.termux builds only).
  *
- * Nothing of REA ships in the APK: the setup scripts live in the intelli_plugins repository
+ * Nothing of REA ships in the APK: the setup scripts live in the Intelli-plugins repository
  * (rea/skills/rea/scripts) and are downloaded into $PREFIX/share/intelli-rea when the user asks for them. Every
  * install step runs `rea-setup.sh <step>`, the same script the REA skill plugin tells agents to run.
  *
@@ -44,7 +44,7 @@ object ReaManager {
     private const val PREFS = "rea_settings"
 
     /** Where the setup files and the skill plugin come from (owner/repo@branch). */
-    const val DEFAULT_SOURCE = "Santoshkurmi/antigem_plugins@main"
+    const val DEFAULT_SOURCE = "spidertox/Intelli-plugins@main"
     private const val SCRIPTS_PATH = "rea/skills/rea/scripts"
     const val PLUGIN_ID = "rea"
     const val CONTAINER = "ubuntu"
