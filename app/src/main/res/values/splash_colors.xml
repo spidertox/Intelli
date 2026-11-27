@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Startup splash and window background before the app's theme loads: always white (in light and dark mode),
+         to match the INTELLI app-icon background, so the tap-to-open zoom flows straight into the splash -->
+    <color name="splash_bg">#FFFFFFFF</color>
+    <bool name="splash_light_bars">true</bool>
+</resources>

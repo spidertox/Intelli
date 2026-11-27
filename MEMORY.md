@@ -1,0 +1,6 @@
+- 2026-11-20: app_name + accessibility labels AntiGem -> INTELLI in app/src/{main,termux}/res/values/strings.xml (applicationId unchanged)
+- 2026-11-20: INTELLI logo -> launcher icon (white bg + drawable-nodpi/ic_launcher_foreground.png), splash icon/wordmark/white bg; removed old prism + wordmark vectors
+- 2026-11-20: default themes recolored to INTELLI blue (theme/AppTheme.kt): light "INTELLI Light", dark "INTELLI Night" (ids unchanged)
+- 2026-11-20: UI text AntiGem -> INTELLI in ~200 Kotlin string literals (+6 title/notification labels); left paths (Download/AntiGem), IDs, serviceName, comments, docs unchanged
+- 2026-11-20: update check off (AppUpdateManager.DEFAULT_VERSION_URL empty -> returns no update); logo saved in branding/intelli-logo.png
+- 2026-11-21: full rebrand AntiGem -> Intelli: applicationId com.antigem -> com.intelli, action strings, paths (~/.antigem -> ~/.intelli, Download/AntiGem -> Download/Intelli), classes renamed (AntiGem* -> Intelli*), chrome.antigem API -> chrome.intelli, antigemFiles -> intelliFiles. "AntiTerm" terminal style name left unchanged (stored preference value). External GitHub repo names/URLs and termux flavor (com.termux) left unchanged.

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand palette -->
+    <color name="brand_primary">#FF1F6FFF</color>
+    <color name="brand_primary_container">#2A2A4A</color>
+    <color name="brand_secondary">#FF8E3DFF</color>
+    <color name="brand_tertiary">#FF00D9FF</color>
+
+    <!-- Dark surfaces -->
+    <color name="surface_dark">#FF0A0A0F</color>
+    <color name="surface_elevated">#FF16161F</color>
+    <color name="surface_card">#FF1E1E2E</color>
+    <color name="surface_divider">#FF2A2A3A</color>
+
+    <!-- Text -->
+    <color name="text_on_background">#FFFFFFFF</color>
+    <color name="text_on_surface">#FFE8E8F0</color>
+    <color name="text_muted">#FF9494A8</color>
+
+    <!-- Status -->
+    <color name="status_connected">#FF00E676</color>
+    <color name="status_connecting">#FF2979FF</color>
+    <color name="status_disconnected">#FFFF5252</color>
+    <color name="status_warning">#FFFFD54F</color>
+    <color name="status_unknown">#FF9494A8</color>
+
+    <!-- Glow -->
+    <color name="glow_primary">#331F6FFF</color>
+</resources>
