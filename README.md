@@ -459,4 +459,4 @@ Intelli is free software, provided as is, without warranty, as described in the 
 
 ## License
 
-Copyright (C) 2026 Santosh Kurmi. Licensed under the [GNU General Public License v3.0](LICENSE) or any later version.
+Copyright (C) 2026 spidertox. Licensed under the [GNU General Public License v3.0](LICENSE) or any later version.
