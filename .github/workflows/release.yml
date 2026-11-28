@@ -77,7 +77,7 @@ jobs:
           echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > app/release.jks
 
       - name: Run Go Unit Tests
-        run: cd agy_ide_bridge && go test ./...
+        run: cp version.json agy_ide_bridge/pkg/buildinfo/version.json && cd agy_ide_bridge && go test ./...
 
       - name: Run Core Kotlin Unit Tests
         run: |
