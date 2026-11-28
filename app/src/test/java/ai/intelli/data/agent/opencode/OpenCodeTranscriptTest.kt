@@ -193,7 +193,7 @@ class OpenCodeTranscriptTest {
             "metadata":{"answers":[["Grid"],["Search","Filters"]]}}"""))
         val done = t.toChatMessages("ses_t").last().toolCalls.single()
         assertEquals("SUCCESS", done.status)
-        assertEquals("• Which layout should the page use?: Grid\n• Which extras?: Search, Filters", done.output)
+        assertEquals("\"Which layout should the page use?\"=\"Grid\", \"Which extras?\"=\"Search, Filters\"", done.output)
         assertEquals(2, done.questionnaire!!.questions.size)
     }
 
