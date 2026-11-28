@@ -249,7 +249,7 @@ object AndroidAutomation {
                 }
                 "android_adb_shell" -> withAdb { d ->
                     val seconds = args.optInt("timeout_seconds", 30).coerceIn(1, 300)
-                    val result = accessShell(context, d, args.getString("command"), seconds)
+                    val result = accessShell(context, d, args.getString("command"), seconds.toLong())
                     val out = (result.stdout + if (result.stderr.isBlank()) "" else "\n[stderr]\n${result.stderr}")
                         .ifBlank { "(no output)" }.let { if (it.length > 60_000) it.take(60_000) + "\n…(truncated)" else it }
                     if (result.exitCode == 0) text(out) else error("Exit code ${result.exitCode}\n$out")
