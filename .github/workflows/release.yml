@@ -76,6 +76,23 @@ jobs:
           fi
           echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > app/release.jks
 
+      - name: Run Go Unit Tests
+        run: cd agy_ide_bridge && go test ./...
+
+      - name: Run Core Kotlin Unit Tests
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest \
+            --tests "ai.intelli.data.local.*" \
+            --tests "ai.intelli.data.privatespace.*" \
+            --tests "ai.intelli.data.jarvis.*" \
+            --tests "ai.intelli.data.remote.*" \
+            --tests "ai.intelli.data.agent.claude.*" \
+            --tests "ai.intelli.data.agent.opencode.*" \
+            --tests "ai.intelli.domain.chat.*" \
+            --tests "ai.intelli.ui.browser.*" \
+            --tests "ai.intelli.ui.components.*"
+
       - name: Build Release APKs
         run: |
           chmod +x gradlew scripts/build_all_apks.sh
