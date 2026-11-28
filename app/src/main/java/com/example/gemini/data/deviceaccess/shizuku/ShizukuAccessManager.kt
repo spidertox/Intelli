@@ -72,7 +72,7 @@ object ShizukuAccessManager {
 
     fun refreshPermission(): Boolean {
         permissionGranted = binderAvailable && runCatching {
-            !Shizuku.isPreV11 && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+            !Shizuku.isPreV11() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         }.getOrDefault(false)
         return permissionGranted
     }
@@ -98,7 +98,7 @@ object ShizukuAccessManager {
     private fun bindUserService() {
         if (!::app.isInitialized || !binderAvailable || !permissionGranted || userService != null || !binding.compareAndSet(false, true)) return
         val args = Shizuku.UserServiceArgs(ComponentName(app, DeviceCommandUserService::class.java))
-            .processName("${app.packageName}:device-access")
+            .processNameSuffix("device-access")
             .tag("intelli-device-access")
             .daemon(false)
         serviceArgs = args

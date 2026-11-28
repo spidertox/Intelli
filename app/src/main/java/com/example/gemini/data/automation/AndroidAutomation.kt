@@ -266,7 +266,7 @@ object AndroidAutomation {
                 provider = DeviceAccessProvider.ADB,
                 command = command,
                 targetDeviceId = device.serial,
-                timeoutSeconds = timeoutSeconds
+                timeoutSeconds = timeoutSeconds.toLong()
             )
         )
     }

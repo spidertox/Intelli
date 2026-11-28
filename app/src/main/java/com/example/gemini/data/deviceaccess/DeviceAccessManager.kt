@@ -135,7 +135,7 @@ object DeviceAccessManager {
         else AdbConnectManager.state.value.devices.firstOrNull { it.serial == request.targetDeviceId && it.state == "device" }
         ?: throw DeviceAccessException("Selected ADB device is disconnected.")
         val target = device ?: throw DeviceAccessException("No verified ADB device is connected.")
-        val result = AdbConnectManager.deviceShell(target, request.command, request.timeoutSeconds, request.id)
+        val result = AdbConnectManager.deviceShell(target, request.command, request.timeoutSeconds.toInt(), request.id)
         return DeviceCommandResult(request.id, request.provider, result.output, "", result.exitCode, result.durationMs, result.exitCode == 124)
     }
 

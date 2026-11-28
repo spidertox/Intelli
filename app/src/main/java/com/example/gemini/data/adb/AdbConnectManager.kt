@@ -251,7 +251,7 @@ object AdbConnectManager {
             val command = "apt-get update && apt-get install -y $keepConfigs $pkg && " +
                 "apt-get install -y $keepConfigs ${'$'}(apt-cache depends $pkg | awk '/Depends:/ && ${'$'}2 !~ /^</ {print ${'$'}2}')"
             appendInstallLog("$ $command")
-            val result = shell(command, 900) { line -> if (line.isNotBlank()) appendInstallLog(line) }
+            val result = shell(command, 900, onLine = { line -> if (line.isNotBlank()) appendInstallLog(line) })
             refreshNow()
             val ok = _state.value.adbInstalled == true
             _state.update {

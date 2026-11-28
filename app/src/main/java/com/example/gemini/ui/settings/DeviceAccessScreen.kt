@@ -42,7 +42,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.menuAnchor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -99,6 +98,26 @@ fun DeviceAccessScreen(cardBg: androidx.compose.ui.graphics.Color, cardBorder: a
     var executionJob by remember { mutableStateOf<Job?>(null) }
     var providerExpanded by remember { mutableStateOf(false) }
     var deviceExpanded by remember { mutableStateOf(false) }
+
+    fun execute(approved: Boolean) {
+        val id = UUID.randomUUID().toString()
+        activeId = id
+        history = (listOf(command) + history).distinct().take(20)
+        running = true
+        error = null
+        executionJob = scope.launch {
+            try {
+                result = DeviceAccessManager.execute(
+                    DeviceCommandRequest(provider, command, selectedDevice, timeoutSeconds = 60, privilegedApproved = approved, id = id)
+                )
+            } catch (t: Throwable) {
+                if (t !is kotlinx.coroutines.CancellationException) error = t.message ?: "Command failed."
+            } finally {
+                running = false
+                activeId = null
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         DeviceAccessManager.init(context)
@@ -328,25 +347,6 @@ fun DeviceAccessScreen(cardBg: androidx.compose.ui.graphics.Color, cardBorder: a
         }
     }
 
-    fun execute(approved: Boolean) {
-        val id = UUID.randomUUID().toString()
-        activeId = id
-        history = (listOf(command) + history).distinct().take(20)
-        running = true
-        error = null
-        executionJob = scope.launch {
-            try {
-                result = DeviceAccessManager.execute(
-                    DeviceCommandRequest(provider, command, selectedDevice, timeoutSeconds = 60, privilegedApproved = approved, id = id)
-                )
-            } catch (t: Throwable) {
-                if (t !is kotlinx.coroutines.CancellationException) error = t.message ?: "Command failed."
-            } finally {
-                running = false
-                activeId = null
-            }
-        }
-    }
 }
 
 @Composable
