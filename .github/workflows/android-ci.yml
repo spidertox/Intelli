@@ -30,6 +30,8 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
       - name: Unit tests
+        id: unit_tests
+        continue-on-error: true
         run: ./gradlew :app:testStandardDebugUnitTest
       - name: Lint
         run: ./gradlew :app:lintStandardDebug
@@ -42,3 +44,6 @@ jobs:
           path: app/build/outputs/apk/**/*.apk
           if-no-files-found: error
           retention-days: 14
+      - name: Report unit test failures
+        if: always()
+        run: test "${{ steps.unit_tests.outcome }}" = success
