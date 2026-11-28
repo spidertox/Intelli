@@ -92,6 +92,11 @@ fun DeviceAccessScreen(cardBg: androidx.compose.ui.graphics.Color, cardBorder: a
     var pendingRoot by remember { mutableStateOf(false) }
     var pendingUbuntuInstall by remember { mutableStateOf(false) }
     var pendingUbuntuRemove by remember { mutableStateOf(false) }
+    var pendingUbuntuBackup by remember { mutableStateOf(false) }
+    var pendingUbuntuRestore by remember { mutableStateOf<RootedUbuntuManager.Backup?>(null) }
+    var pendingUbuntuBackupDelete by remember { mutableStateOf<RootedUbuntuManager.Backup?>(null) }
+    var ubuntuBackups by remember { mutableStateOf(emptyList<RootedUbuntuManager.Backup>()) }
+    var ubuntuBusy by remember { mutableStateOf(false) }
     var ubuntuProgress by remember { mutableStateOf<Int?>(null) }
     var ubuntuProgressText by remember { mutableStateOf("") }
     var activeId by remember { mutableStateOf<String?>(null) }
@@ -121,6 +126,7 @@ fun DeviceAccessScreen(cardBg: androidx.compose.ui.graphics.Color, cardBorder: a
 
     LaunchedEffect(Unit) {
         DeviceAccessManager.init(context)
+        ubuntuBackups = RootedUbuntuManager.listBackups(context)
         while (true) {
             val snapshot = linkedMapOf<DeviceAccessProvider, ProviderStatus>()
             DeviceAccessProvider.entries.forEach { snapshot[it] = DeviceAccessManager.status(it) }
@@ -195,6 +201,69 @@ fun DeviceAccessScreen(cardBg: androidx.compose.ui.graphics.Color, cardBorder: a
         }) { Text("Remove rootfs") } },
         dismissButton = { TextButton(onClick = { pendingUbuntuRemove = false }) { Text("Keep it") } }
     )
+    if (pendingUbuntuBackup) AlertDialog(
+        onDismissRequest = { pendingUbuntuBackup = false },
+        title = { Text("Back up Ubuntu root chroot?") },
+        text = { Text("Intelli will create a checksum-verified archive in its private storage. The archive contains the entire Ubuntu rootfs and can use roughly as much free space as the installed environment. Root authorization is required.") },
+        confirmButton = { Button(enabled = !ubuntuBusy, onClick = {
+            pendingUbuntuBackup = false
+            ubuntuBusy = true
+            scope.launch {
+                try {
+                    val backup = RootedUbuntuManager.createBackup(context, approved = true)
+                    DeviceAccessAuditLog.record("ubuntu-rootfs-backup:${backup.id}", DeviceAccessProvider.UBUNTU_CHROOT, 0, "completed")
+                    ubuntuBackups = RootedUbuntuManager.listBackups(context)
+                    error = null
+                } catch (t: Throwable) {
+                    DeviceAccessAuditLog.record("ubuntu-rootfs-backup", DeviceAccessProvider.UBUNTU_CHROOT, null, "failed:${t.javaClass.simpleName}")
+                    error = t.message ?: "Ubuntu backup failed."
+                } finally { ubuntuBusy = false }
+            }
+        }) { Text("Create backup") } },
+        dismissButton = { TextButton(onClick = { pendingUbuntuBackup = false }) { Text("Cancel") } }
+    )
+    pendingUbuntuRestore?.let { backup -> AlertDialog(
+        onDismissRequest = { pendingUbuntuRestore = null },
+        title = { Text("Replace Ubuntu root chroot?") },
+        text = { Text("Restore backup ${backup.id} (${backup.sizeBytes / (1024 * 1024)} MB). This replaces the current Ubuntu rootfs after checksum verification. Intelli first stages and validates the restored filesystem; the old rootfs is kept until the swap succeeds. Root authorization is required.") },
+        confirmButton = { Button(enabled = !ubuntuBusy, onClick = {
+            pendingUbuntuRestore = null
+            ubuntuBusy = true
+            scope.launch {
+                try {
+                    RootedUbuntuManager.restoreBackup(context, backup.id, approved = true)
+                    DeviceAccessAuditLog.record("ubuntu-rootfs-restore:${backup.id}", DeviceAccessProvider.UBUNTU_CHROOT, 0, "completed")
+                    statuses = DeviceAccessProvider.entries.associateWith { DeviceAccessManager.status(it) }
+                    error = null
+                } catch (t: Throwable) {
+                    DeviceAccessAuditLog.record("ubuntu-rootfs-restore:${backup.id}", DeviceAccessProvider.UBUNTU_CHROOT, null, "failed:${t.javaClass.simpleName}")
+                    error = t.message ?: "Ubuntu restore failed."
+                } finally { ubuntuBusy = false }
+            }
+        }) { Text("Verify and restore") } },
+        dismissButton = { TextButton(onClick = { pendingUbuntuRestore = null }) { Text("Cancel") } }
+    ) }
+    pendingUbuntuBackupDelete?.let { backup -> AlertDialog(
+        onDismissRequest = { pendingUbuntuBackupDelete = null },
+        title = { Text("Delete Ubuntu backup?") },
+        text = { Text("Permanently delete the private backup ${backup.id}. The active Ubuntu rootfs will not be changed.") },
+        confirmButton = { Button(enabled = !ubuntuBusy, onClick = {
+            pendingUbuntuBackupDelete = null
+            ubuntuBusy = true
+            scope.launch {
+                try {
+                    RootedUbuntuManager.deleteBackup(context, backup.id, approved = true)
+                    DeviceAccessAuditLog.record("ubuntu-rootfs-backup-delete:${backup.id}", DeviceAccessProvider.UBUNTU_CHROOT, 0, "completed")
+                    ubuntuBackups = RootedUbuntuManager.listBackups(context)
+                    error = null
+                } catch (t: Throwable) {
+                    DeviceAccessAuditLog.record("ubuntu-rootfs-backup-delete:${backup.id}", DeviceAccessProvider.UBUNTU_CHROOT, null, "failed:${t.javaClass.simpleName}")
+                    error = t.message ?: "Ubuntu backup deletion failed."
+                } finally { ubuntuBusy = false }
+            }
+        }) { Text("Delete backup") } },
+        dismissButton = { TextButton(onClick = { pendingUbuntuBackupDelete = null }) { Text("Cancel") } }
+    ) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -239,9 +308,26 @@ fun DeviceAccessScreen(cardBg: androidx.compose.ui.graphics.Color, cardBorder: a
                         Text(ubuntuProgressText, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else if (RootedUbuntuManager.isInstalled(context)) {
                         Text("Disk use: ${RootedUbuntuManager.diskUsageBytes(context) / (1024 * 1024)} MB", fontSize = 12.sp)
-                        OutlinedButton(onClick = { pendingUbuntuRemove = true }) { Text("Remove Ubuntu rootfs…") }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(enabled = !ubuntuBusy && !running, onClick = { pendingUbuntuBackup = true }) { Text("Back up…") }
+                            OutlinedButton(enabled = !ubuntuBusy && !running, onClick = { pendingUbuntuRemove = true }) { Text("Remove…") }
+                        }
                     } else {
                         Button(onClick = { pendingUbuntuInstall = true }, enabled = RootedUbuntuManager.supportedArchitecture()) { Text("Install Ubuntu root chroot…") }
+                    }
+                    if (ubuntuBusy) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text("Working with Ubuntu rootfs…", fontSize = 11.sp)
+                    }
+                    if (ubuntuBackups.isNotEmpty()) {
+                        Text("Verified private backups", style = MaterialTheme.typography.labelLarge)
+                        ubuntuBackups.take(4).forEach { backup ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("${backup.id} · ${backup.sizeBytes / (1024 * 1024)} MB", Modifier.weight(1f), fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                                TextButton(enabled = !ubuntuBusy && !running, onClick = { pendingUbuntuRestore = backup }) { Text("Restore") }
+                                TextButton(enabled = !ubuntuBusy && !running, onClick = { pendingUbuntuBackupDelete = backup }) { Text("Delete") }
+                            }
+                        }
                     }
                 }
                 if (provider == DeviceAccessProvider.ADB || provider == DeviceAccessProvider.WIRELESS_ADB) {

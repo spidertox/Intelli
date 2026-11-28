@@ -22,10 +22,16 @@ object RootedUbuntuManager {
     // Pinned from Ubuntu's signed SHA256SUMS for Ubuntu Base 24.04.5 arm64.
     private const val EXPECTED_SHA256 = "a91d5a93010193712d346d761372b7c9db6dfcf093893161c64ca107f05914f2"
     private val active = ConcurrentHashMap<String, Process>()
+    private val backupIdRegex = Regex("^[0-9]{13}-[0-9a-f]{8}$")
+
+    data class Backup(val id: String, val sizeBytes: Long, val sourceSizeBytes: Long, val createdAt: Long)
 
     fun rootfs(context: Context) = File(context.filesDir, "device-access/ubuntu-chroot/rootfs")
     private fun staging(context: Context) = File(context.filesDir, "device-access/ubuntu-chroot/rootfs.new")
     private fun archive(context: Context) = File(context.filesDir, "device-access/ubuntu-chroot/$ARCHIVE_NAME")
+    private fun backupsDir(context: Context) = File(context.filesDir, "device-access/ubuntu-chroot/backups")
+    private fun backupFile(context: Context, id: String) = File(backupsDir(context), "ubuntu-rootfs-$id.tar.gz")
+    private fun backupMetadata(context: Context, id: String) = File(backupsDir(context), "ubuntu-rootfs-$id.sha256")
 
     fun supportedArchitecture(): Boolean = Build.SUPPORTED_ABIS.any { it == "arm64-v8a" }
 
@@ -35,6 +41,97 @@ object RootedUbuntuManager {
     }
 
     fun diskUsageBytes(context: Context): Long = rootfs(context).walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+    suspend fun listBackups(context: Context): List<Backup> = withContext(Dispatchers.IO) {
+        val directory = backupsDir(context)
+        directory.listFiles().orEmpty().mapNotNull { file ->
+            val match = Regex("^ubuntu-rootfs-([0-9]{13}-[0-9a-f]{8})\\.tar\\.gz$").matchEntire(file.name) ?: return@mapNotNull null
+            val id = match.groupValues[1]
+            val metadata = backupMetadata(context, id)
+            if (!file.isFile || !metadata.isFile) return@mapNotNull null
+            val fields = runCatching { metadata.readText().trim().lines() }.getOrNull() ?: return@mapNotNull null
+            if (fields.size != 2 || !DigestPolicy.isSha256(fields[0])) return@mapNotNull null
+            val sourceBytes = fields[1].toLongOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
+            if (runCatching { sha256(file) != fields[0] }.getOrDefault(true)) return@mapNotNull null
+            Backup(id, file.length(), sourceBytes, id.substringBefore('-').toLongOrNull() ?: file.lastModified())
+        }.sortedByDescending { it.createdAt }
+    }
+
+    suspend fun createBackup(context: Context, approved: Boolean): Backup = withContext(Dispatchers.IO) {
+        require(approved) { "Ubuntu rootfs backup requires explicit confirmation." }
+        require(isInstalled(context)) { "Ubuntu root chroot is not installed." }
+        require(supportedArchitecture()) { "This Ubuntu rootfs requires arm64." }
+        val app = context.applicationContext
+        val source = rootfs(app)
+        val sourceSize = diskUsageBytes(app)
+        require(sourceSize > 0) { "The Ubuntu rootfs is empty; refusing to create a backup." }
+        val directory = backupsDir(app).apply { mkdirs() }
+        require(StatFs(directory.absolutePath).availableBytes >= sourceSize + 64L * 1024 * 1024) {
+            "Not enough free storage for a safe Ubuntu rootfs backup."
+        }
+        val id = "${System.currentTimeMillis()}-${java.util.UUID.randomUUID().toString().take(8)}"
+        val output = backupFile(app, id)
+        val temporary = File(directory, "ubuntu-rootfs-$id.tar.gz.new")
+        val script = "set -eu; toybox tar -czf ${quote(temporary.absolutePath)} -C ${quote(source.absolutePath)} .; " +
+            "chown ${android.os.Process.myUid()}:${android.os.Process.myUid()} ${quote(temporary.absolutePath)}; " +
+            "mv ${quote(temporary.absolutePath)} ${quote(output.absolutePath)}"
+        try {
+            val (code, result) = runSu(script, 900)
+            check(code == 0 && output.isFile && output.length() > 0) { "Ubuntu backup failed (exit $code): ${result.take(400)}" }
+            backupMetadata(app, id).writeText("${sha256(output)}\n$sourceSize\n")
+            Backup(id, output.length(), sourceSize, id.substringBefore('-').toLong())
+        } catch (error: Throwable) {
+            temporary.delete()
+            output.delete()
+            backupMetadata(app, id).delete()
+            throw error
+        }
+    }
+
+    suspend fun restoreBackup(context: Context, id: String, approved: Boolean) = withContext(Dispatchers.IO) {
+        require(approved) { "Ubuntu rootfs restore requires explicit confirmation." }
+        require(DigestPolicy.isValidBackupId(id)) { "Invalid Ubuntu backup identifier." }
+        require(supportedArchitecture()) { "This Ubuntu rootfs requires arm64." }
+        val app = context.applicationContext
+        val backup = backupFile(app, id)
+        val fields = backupMetadata(app, id).takeIf { it.isFile }?.readText()?.trim()?.lines()
+            ?: throw IllegalArgumentException("Backup metadata is missing.")
+        require(backup.isFile && fields.size == 2 && DigestPolicy.isSha256(fields[0])) { "Ubuntu backup is incomplete or invalid." }
+        val sourceSize = fields[1].toLongOrNull()?.takeIf { it > 0 } ?: throw IllegalArgumentException("Backup size metadata is invalid.")
+        require(sha256(backup) == fields[0]) { "Ubuntu backup checksum verification failed; refusing to restore." }
+        val parent = rootfs(app).parentFile!!
+        parent.mkdirs()
+        require(StatFs(parent.absolutePath).availableBytes >= sourceSize + 64L * 1024 * 1024) {
+            "Not enough free storage to restore this Ubuntu rootfs safely."
+        }
+        val root = rootfs(app)
+        val newRoot = staging(app)
+        val oldRoot = File(parent, "rootfs.old")
+        val script = buildString {
+            append("set -eu; ")
+            append("rm -rf ").append(quote(newRoot.absolutePath)).append(' ').append(quote(oldRoot.absolutePath)).append("; ")
+            append("mkdir -p ").append(quote(newRoot.absolutePath)).append("; ")
+            append("toybox tar -xzf ").append(quote(backup.absolutePath)).append(" -C ").append(quote(newRoot.absolutePath)).append("; ")
+            append("test -e ").append(quote(File(newRoot, "etc/os-release").absolutePath)).append("; ")
+            append("test -e ").append(quote(File(newRoot, "bin/sh").absolutePath)).append(" -o -e ").append(quote(File(newRoot, "usr/bin/bash").absolutePath)).append("; ")
+            append("chown -R 0:0 ").append(quote(newRoot.absolutePath)).append("; ")
+            append("if [ -e ").append(quote(root.absolutePath)).append(" ]; then mv ").append(quote(root.absolutePath)).append(' ').append(quote(oldRoot.absolutePath)).append("; fi; ")
+            append("if mv ").append(quote(newRoot.absolutePath)).append(' ').append(quote(root.absolutePath)).append("; then rm -rf ").append(quote(oldRoot.absolutePath)).append("; ")
+            append("else if [ -e ").append(quote(oldRoot.absolutePath)).append(" ]; then mv ").append(quote(oldRoot.absolutePath)).append(' ').append(quote(root.absolutePath)).append("; fi; exit 1; fi")
+        }
+        val (code, result) = runSu(script, 900)
+        check(code == 0 && isInstalled(app)) { "Ubuntu restore failed (exit $code): ${result.take(500)}" }
+    }
+
+    suspend fun deleteBackup(context: Context, id: String, approved: Boolean) = withContext(Dispatchers.IO) {
+        require(approved) { "Ubuntu backup deletion requires explicit confirmation." }
+        require(DigestPolicy.isValidBackupId(id)) { "Invalid Ubuntu backup identifier." }
+        val data = backupFile(context, id)
+        val metadata = backupMetadata(context, id)
+        require(data.isFile) { "Ubuntu backup was not found." }
+        check(data.delete()) { "Could not delete Ubuntu backup archive." }
+        metadata.delete()
+    }
 
     suspend fun install(context: Context, approved: Boolean, onProgress: (Int, String) -> Unit = { _, _ -> }) = withContext(Dispatchers.IO) {
         require(approved) { "Ubuntu chroot installation requires explicit confirmation." }
@@ -156,6 +253,11 @@ object RootedUbuntuManager {
             while (true) { val n = input.read(buffer); if (n < 0) break; digest.update(buffer, 0, n) }
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    internal object DigestPolicy {
+        fun isSha256(value: String): Boolean = value.matches(Regex("^[0-9a-f]{64}$"))
+        fun isValidBackupId(value: String): Boolean = backupIdRegex.matches(value)
     }
 
     private fun quote(value: String): String = "'" + value.replace("'", "'\\''") + "'"

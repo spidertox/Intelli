@@ -44,4 +44,17 @@ class DeviceAccessRequestPolicyTest {
         assertEquals("err", result.stderr)
         assertEquals(9, result.exitCode)
     }
+
+    @Test fun ubuntuBackupIdsCannotSelectPaths() {
+        assertEquals(true, RootedUbuntuManager.DigestPolicy.isValidBackupId("1735689600000-a1b2c3d4"))
+        listOf("../rootfs", "ubuntu-rootfs-1735689600000-a1b2c3d4", "1735689600000-a1b2c3d4/../../x", "1735689600000-A1B2C3D4")
+            .forEach { id -> assertEquals(false, RootedUbuntuManager.DigestPolicy.isValidBackupId(id)) }
+    }
+
+    @Test fun ubuntuBackupDigestMustBeAFullLowercaseSha256() {
+        assertEquals(true, RootedUbuntuManager.DigestPolicy.isSha256("a".repeat(64)))
+        assertEquals(false, RootedUbuntuManager.DigestPolicy.isSha256("a".repeat(63)))
+        assertEquals(false, RootedUbuntuManager.DigestPolicy.isSha256("A".repeat(64)))
+        assertEquals(false, RootedUbuntuManager.DigestPolicy.isSha256("z".repeat(64)))
+    }
 }
