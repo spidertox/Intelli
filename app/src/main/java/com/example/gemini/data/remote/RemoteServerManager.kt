@@ -277,10 +277,14 @@ object RemoteServerManager {
     // Remote commands
     // ---------------------------------------------------------------------------------------------------------
 
+    private val activeExecChannels = java.util.concurrent.ConcurrentHashMap<String, ChannelExec>()
+    internal fun cancelCommand(executionId: String) { activeExecChannels.remove(executionId)?.disconnect() }
+
     internal fun q(text: String) = "'" + text.replace("'", "'\\''") + "'"
 
-    internal fun exec(s: Session, command: String, timeoutMs: Long = 30_000): Pair<Int, String> {
+    internal fun exec(s: Session, command: String, timeoutMs: Long = 30_000, executionId: String? = null): Pair<Int, String> {
         val channel = s.openChannel("exec") as ChannelExec
+        if (executionId != null) activeExecChannels[executionId] = channel
         channel.setCommand("sh -c ${q(command)} 2>&1")
         val input = channel.inputStream
         channel.connect(10_000)
@@ -303,12 +307,13 @@ object RemoteServerManager {
                     break
                 }
                 if (System.currentTimeMillis() > deadline) {
-                    return -1 to (out.toString(Charsets.UTF_8.name()) + "\n[timed out]").trim()
+                    return 124 to (out.toString(Charsets.UTF_8.name()) + "\n[timed out]").trim()
                 }
                 Thread.sleep(40)
             }
             return channel.exitStatus to out.toString(Charsets.UTF_8.name()).trim()
         } finally {
+            if (executionId != null) activeExecChannels.remove(executionId, channel)
             channel.disconnect()
         }
     }

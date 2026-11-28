@@ -129,6 +129,7 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     DIAGNOSTICS("Diagnostics & Performance", "Live network connections, active streams & thread HUD"),
     UTILITIES("Utilities", "Handy device tools"),
     GITHUB("GitHub", "Sign in with the GitHub CLI, your repositories and git credentials"),
+    DEVICE_ACCESS("Device Access", "Choose ADB, Shizuku, root, Ubuntu or SSH for commands"),
     ADB_CONNECT("ADB Connect", "Connect the terminal's adb to this phone over Wireless debugging"),
     ANDROID_AUTOMATION("Android Automation", "Let AI agents see and control this phone"),
     REA("REA · Reverse Engineering", "Let agents analyze APKs, Flutter, React Native and native code"),
@@ -723,6 +724,11 @@ fun SettingsDialog(
                             onDismiss()
                         }
                     )
+                    SettingsSection.DEVICE_ACCESS -> DeviceAccessScreen(
+                        cardBg = cardBg,
+                        cardBorder = cardBorder,
+                        onOpenAdbConnect = { currentSection = SettingsSection.ADB_CONNECT }
+                    )
                     SettingsSection.ADB_CONNECT -> AdbConnectScreen(
                         cardBg = cardBg,
                         cardBorder = cardBorder
@@ -914,6 +920,7 @@ private fun MainSettingsMenu(
                 row(SettingsSection.TERMINAL, Icons.Outlined.Terminal, c.accentIndigo,
                     if (useSshTerminal || com.example.gemini.data.preferences.AuthPreferences.currentRemoteMode) "SSH" else "Local"),
                 githubRow,
+                deviceTools.access,
                 deviceTools.adb,
                 deviceTools.automation,
                 reaRow,
@@ -1108,7 +1115,7 @@ private fun rememberAndroidDevRow(onNavigate: (SettingsSection) -> Unit): Settin
 }
 
 /** The ADB Connect and Android Automation rows of the main settings page, with their live state. */
-private class DeviceToolRows(val adb: SettingsRowItem, val automation: SettingsRowItem)
+private class DeviceToolRows(val access: SettingsRowItem, val adb: SettingsRowItem, val automation: SettingsRowItem)
 
 @Composable
 private fun rememberDeviceToolRows(onNavigate: (SettingsSection) -> Unit): DeviceToolRows {
@@ -1128,6 +1135,10 @@ private fun rememberDeviceToolRows(onNavigate: (SettingsSection) -> Unit): Devic
     }
     val c = com.example.gemini.theme.AppColors
     return DeviceToolRows(
+        access = SettingsRowItem(
+            Icons.Outlined.Security, c.accentAlt, SettingsSection.DEVICE_ACCESS.title,
+            "Provider console", null
+        ) { onNavigate(SettingsSection.DEVICE_ACCESS) },
         adb = SettingsRowItem(
             Icons.Outlined.PhonelinkSetup, c.accentTeal, SettingsSection.ADB_CONNECT.title,
             when {

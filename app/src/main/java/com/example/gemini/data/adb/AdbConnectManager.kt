@@ -182,26 +182,26 @@ object AdbConnectManager {
     /** In server mode adb means the SERVER's adb: everything here runs there, over the app's SSH connection. */
     private val remote get() = AuthPreferences.currentRemoteMode
 
-    private suspend fun shell(command: String, timeoutSeconds: Long = 30, onLine: ((String) -> Unit)? = null): LocalCommandResult {
-        if (remote) return serverShell(command, timeoutSeconds, onLine)
+    private suspend fun shell(command: String, timeoutSeconds: Long = 30, onLine: ((String) -> Unit)? = null, executionId: String? = null): LocalCommandResult {
+        if (remote) return serverShell(command, timeoutSeconds, onLine, executionId)
         return LocalEnvironmentManager.executeCommand(
             "( $command ) < /dev/null", appContext, timeoutSeconds = timeoutSeconds,
-            customEnv = mapOf("DEBIAN_FRONTEND" to "noninteractive"), onOutputLine = onLine
+            customEnv = mapOf("DEBIAN_FRONTEND" to "noninteractive"), onOutputLine = onLine, executionId = executionId
         )
     }
 
-    private suspend fun serverShell(command: String, timeoutSeconds: Long, onLine: ((String) -> Unit)?): LocalCommandResult = withContext(Dispatchers.IO) {
+    private suspend fun serverShell(command: String, timeoutSeconds: Long, onLine: ((String) -> Unit)?, executionId: String? = null): LocalCommandResult = withContext(Dispatchers.IO) {
         val s = RemoteServerManager.controlSession()
             ?: return@withContext LocalCommandResult(255, "SSH to the server is not connected. Check Settings > Servers.", 0)
         val started = System.currentTimeMillis()
-        val (code, out) = runCatching { RemoteServerManager.exec(s, "( $command ) < /dev/null", timeoutSeconds * 1000) }
+        val (code, out) = runCatching { RemoteServerManager.exec(s, "( $command ) < /dev/null", timeoutSeconds * 1000, executionId) }
             .getOrElse { 255 to (it.message ?: "SSH error") }
         if (onLine != null) out.lineSequence().forEach(onLine)
         LocalCommandResult(code, out, System.currentTimeMillis() - started)
     }
 
     // `timeout` keeps a stuck adb from blocking the output reader forever
-    private suspend fun adb(args: String, seconds: Int = 20) = shell("timeout $seconds adb $args", seconds + 5L)
+    private suspend fun adb(args: String, seconds: Int = 20, executionId: String? = null) = shell("timeout $seconds adb $args", seconds + 5L, executionId = executionId)
 
     /** [quiet] skips the spinner, for background re-checks. */
     fun refresh(quiet: Boolean = false) = scope.launch {
@@ -344,8 +344,13 @@ object AdbConnectManager {
     suspend fun runAdb(device: Device, args: String, seconds: Int = 30) = adb("-s ${device.serial} $args", seconds)
 
     /** Runs [command] in `adb shell` on [device], as the shell user. */
-    suspend fun deviceShell(device: Device, command: String, seconds: Int = 30) =
-        adb("-s ${device.serial} shell ${shellQuote(command)}", seconds)
+    suspend fun deviceShell(device: Device, command: String, seconds: Int = 30, executionId: String? = null) =
+        adb("-s ${device.serial} shell ${shellQuote(command)}", seconds, executionId)
+
+    fun cancelCommand(executionId: String) {
+        LocalEnvironmentManager.cancelCommand(executionId)
+        RemoteServerManager.cancelCommand(executionId)
+    }
 
     fun shellQuote(value: String) = "'" + value.replace("'", "'\\''") + "'"
 

@@ -20,6 +20,10 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction
 import com.example.gemini.data.adb.AdbConnectManager
+import com.example.gemini.data.deviceaccess.DeviceAccessManager
+import com.example.gemini.data.deviceaccess.DeviceAccessProvider
+import com.example.gemini.data.deviceaccess.DeviceCommandRequest
+import com.example.gemini.data.deviceaccess.DeviceCommandResult
 import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
@@ -76,11 +80,11 @@ object AndroidAutomation {
     suspend fun enableViaAdb(context: Context): Result<Unit> {
         val device = AdbConnectManager.ensureConnected() ?: return Result.failure(IllegalStateException("ADB is not connected"))
         val name = component(context).flattenToString()
-        val current = AdbConnectManager.deviceShell(device, "settings get secure enabled_accessibility_services").output.trim()
+        val current = accessShell(context, device, "settings get secure enabled_accessibility_services").stdout.trim()
         val services = current.split(':').filter { it.isNotBlank() && it != "null" }.toMutableList()
         if (services.none { it.equals(name, true) }) services += name
-        AdbConnectManager.deviceShell(device, "settings put secure enabled_accessibility_services ${services.joinToString(":")}")
-        AdbConnectManager.deviceShell(device, "settings put secure accessibility_enabled 1")
+        accessShell(context, device, "settings put secure enabled_accessibility_services ${services.joinToString(":")}")
+        accessShell(context, device, "settings put secure accessibility_enabled 1")
         repeat(20) {
             if (isServiceRunning()) return Result.success(Unit)
             delay(250)
@@ -232,7 +236,7 @@ object AndroidAutomation {
                 "android_launch_app" -> launchApp(context, svc, args)
                 "android_open_intent" -> openIntent(svc, args)
                 "android_wait_for" -> waitFor(svc, args)
-                "android_press_key" -> pressKey(svc, args.getString("key"))
+                "android_press_key" -> pressKey(context, svc, args.getString("key"))
                 "android_install_apk" -> withAdb { d ->
                     val out = AdbConnectManager.runAdb(d, "install -r ${AdbConnectManager.shellQuote(args.getString("path"))}", 240).output.trim()
                     if (out.contains("Success")) text("Installed.\n$out") else error(out.ifBlank { "adb install failed" })
@@ -240,18 +244,31 @@ object AndroidAutomation {
                 "android_uninstall_app" -> uninstall(context, svc, args)
                 "android_force_stop_app" -> withAdb { d ->
                     val pkg = packageArg(args)
-                    AdbConnectManager.deviceShell(d, "am force-stop $pkg")
-                    text("Force-stopped $pkg.")
+                    val result = accessShell(context, d, "am force-stop $pkg")
+                    if (result.exitCode == 0) text("Force-stopped $pkg.") else error(result.stderr.ifBlank { result.stdout })
                 }
                 "android_adb_shell" -> withAdb { d ->
                     val seconds = args.optInt("timeout_seconds", 30).coerceIn(1, 300)
-                    val result = AdbConnectManager.deviceShell(d, args.getString("command"), seconds)
-                    val out = result.output.ifBlank { "(no output)" }.let { if (it.length > 60_000) it.take(60_000) + "\n…(truncated)" else it }
+                    val result = accessShell(context, d, args.getString("command"), seconds)
+                    val out = (result.stdout + if (result.stderr.isBlank()) "" else "\n[stderr]\n${result.stderr}")
+                        .ifBlank { "(no output)" }.let { if (it.length > 60_000) it.take(60_000) + "\n…(truncated)" else it }
                     if (result.exitCode == 0) text(out) else error("Exit code ${result.exitCode}\n$out")
                 }
                 else -> error("Unknown tool $name")
             }
         }.getOrElse { error("$name failed: ${it.message ?: it.javaClass.simpleName}") }
+    }
+
+    private suspend fun accessShell(context: Context, device: AdbConnectManager.Device, command: String, timeoutSeconds: Long = 30): DeviceCommandResult {
+        DeviceAccessManager.init(context)
+        return DeviceAccessManager.execute(
+            DeviceCommandRequest(
+                provider = DeviceAccessProvider.ADB,
+                command = command,
+                targetDeviceId = device.serial,
+                timeoutSeconds = timeoutSeconds
+            )
+        )
     }
 
     private suspend fun withAdb(block: suspend (AdbConnectManager.Device) -> JSONObject): JSONObject {
@@ -708,7 +725,7 @@ object AndroidAutomation {
         return error("Timed out after ${timeout}ms: \"$wanted\" ${if (gone) "is still on screen" else "never appeared"}.")
     }
 
-    private suspend fun pressKey(svc: AutomationAccessibilityService, key: String): JSONObject {
+    private suspend fun pressKey(context: Context, svc: AutomationAccessibilityService, key: String): JSONObject {
         val name = key.trim().uppercase().removePrefix("KEYCODE_")
         if (!Regex("^[A-Z0-9_]+$").matches(name)) return error("Invalid key \"$key\".")
         val device = AdbConnectManager.ensureConnected()
@@ -722,8 +739,8 @@ object AndroidAutomation {
             svc.performGlobalAction(global)
         } else {
             val code = if (name.all(Char::isDigit)) name else "KEYCODE_$name"
-            val result = AdbConnectManager.deviceShell(device, "input keyevent $code", 15)
-            if (result.exitCode != 0) return error(result.output.ifBlank { "input keyevent failed" })
+            val result = accessShell(context, device, "input keyevent $code", 15)
+            if (result.exitCode != 0) return error((result.stderr + result.stdout).ifBlank { "input keyevent failed" })
         }
         svc.awaitIdle()
         return text("Pressed $name. ${foreground(svc)}")
@@ -735,7 +752,8 @@ object AndroidAutomation {
         val device = AdbConnectManager.ensureConnected()
         if (device != null) {
             val keep = if (args.optBoolean("keep_data")) "-k " else ""
-            val out = AdbConnectManager.deviceShell(device, "pm uninstall $keep$pkg", 60).output.trim()
+            val result = accessShell(context, device, "pm uninstall $keep$pkg", 60)
+            val out = (result.stdout + result.stderr).trim()
             return if (out.contains("Success")) text("Uninstalled $pkg.") else error(out.ifBlank { "pm uninstall failed" })
         }
         @Suppress("DEPRECATION")

@@ -32,6 +32,7 @@ import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
 import java.io.*
 import java.text.DecimalFormat
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipInputStream
 
 data class LocalCommandResult(
@@ -55,6 +56,9 @@ sealed class BootstrapSource {
 }
 
 object LocalEnvironmentManager {
+
+    private val activeCommandProcesses = ConcurrentHashMap<String, Process>()
+    fun cancelCommand(executionId: String) { activeCommandProcesses[executionId]?.let { runCatching { it.destroyForcibly() } } }
 
     private const val TAG = "LocalEnvironmentManager"
     private const val BOOTSTRAP_VERSION = "2026.08"
@@ -2314,7 +2318,8 @@ All files created here persist inside the application.
         workingDir: String? = null,
         customEnv: Map<String, String>? = null,
         timeoutSeconds: Long = 60,
-        onOutputLine: ((String) -> Unit)? = null
+        onOutputLine: ((String) -> Unit)? = null,
+        executionId: String? = null
     ): LocalCommandResult = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
         val env = mutableMapOf<String, String>()
@@ -2404,32 +2409,21 @@ All files created here persist inside the application.
                 processBuilder.environment().putAll(customEnv)
             }
             processBuilder.redirectErrorStream(true)
-            return@withContext try {
-                val process = processBuilder.start()
-                val outputBuilder = StringBuilder()
-                val reader = BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8))
-                var line: String?
-                while (reader.readLine().also { line = it } != null) {
-                    outputBuilder.append(line).append("\n")
-                    onOutputLine?.invoke(line!!)
-                }
-                val exited = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-                val durationMs = System.currentTimeMillis() - startTime
-                if (!exited) {
-                    process.destroyForcibly()
-                    outputBuilder.append("\n[Process timed out after ${timeoutSeconds}s]")
-                    LocalCommandResult(exitCode = 124, output = outputBuilder.toString().trim(), durationMs = durationMs)
-                } else {
-                    LocalCommandResult(exitCode = process.exitValue(), output = outputBuilder.toString().trim(), durationMs = durationMs)
-                }
+            val process = try { processBuilder.start() } catch (e: Exception) {
+                return@withContext LocalCommandResult(1, "Execution failed: ${e.localizedMessage ?: e.message}", System.currentTimeMillis() - startTime)
+            }
+            if (executionId != null) activeCommandProcesses[executionId] = process
+            try {
+                val (exitCode, output) = awaitProcess(process, timeoutSeconds, onOutputLine)
+                LocalCommandResult(exitCode, output, System.currentTimeMillis() - startTime)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
-                val durationMs = System.currentTimeMillis() - startTime
                 Log.e(TAG, "Command execution error: ${e.message}")
-                LocalCommandResult(
-                    exitCode = 1,
-                    output = "Execution failed: ${e.localizedMessage ?: e.message}",
-                    durationMs = durationMs
-                )
+                LocalCommandResult(1, "Execution failed: ${e.localizedMessage ?: e.message}", System.currentTimeMillis() - startTime)
+            } finally {
+                if (executionId != null) activeCommandProcesses.remove(executionId, process)
+                if (process.isAlive) process.destroyForcibly()
             }
         }
 
@@ -2491,37 +2485,57 @@ All files created here persist inside the application.
         procEnv.putAll(env)
         processBuilder.redirectErrorStream(true)
 
-        return@withContext try {
-            val process = processBuilder.start()
-            val outputBuilder = StringBuilder()
-
-            val reader = BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8))
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                outputBuilder.append(line).append("\n")
-                onOutputLine?.invoke(line!!)
-            }
-
-            val exited = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-            val durationMs = System.currentTimeMillis() - startTime
-
-            if (!exited) {
-                process.destroyForcibly()
-                outputBuilder.append("\n[Process timed out after ${timeoutSeconds}s]")
-                LocalCommandResult(exitCode = 124, output = outputBuilder.toString().trim(), durationMs = durationMs)
-            } else {
-                val exitCode = process.exitValue()
-                LocalCommandResult(exitCode = exitCode, output = outputBuilder.toString().trim(), durationMs = durationMs)
-            }
-        } catch (e: Exception) {
-            val durationMs = System.currentTimeMillis() - startTime
-            Log.e(TAG, "Command execution error: ${e.message}")
-            LocalCommandResult(
-                exitCode = 1,
-                output = "Execution failed: ${e.localizedMessage ?: e.message}",
-                durationMs = durationMs
-            )
+        val process = try { processBuilder.start() } catch (e: Exception) {
+            return@withContext LocalCommandResult(1, "Execution failed: ${e.localizedMessage ?: e.message}", System.currentTimeMillis() - startTime)
         }
+        if (executionId != null) activeCommandProcesses[executionId] = process
+        try {
+            val (exitCode, output) = awaitProcess(process, timeoutSeconds, onOutputLine)
+            LocalCommandResult(exitCode, output, System.currentTimeMillis() - startTime)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: Exception) {
+            Log.e(TAG, "Command execution error: ${e.message}")
+            LocalCommandResult(1, "Execution failed: ${e.localizedMessage ?: e.message}", System.currentTimeMillis() - startTime)
+        } finally {
+            if (executionId != null) activeCommandProcesses.remove(executionId, process)
+            if (process.isAlive) process.destroyForcibly()
+        }
+    }
+
+    private fun awaitProcess(
+        process: Process,
+        timeoutSeconds: Long,
+        onOutputLine: ((String) -> Unit)?
+    ): Pair<Int, String> {
+        val output = StringBuilder()
+        val reader = Thread({
+            try {
+                BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8)).use { stream ->
+                    var line: String?
+                    while (stream.readLine().also { line = it } != null) {
+                        val current = line.orEmpty()
+                        synchronized(output) {
+                            if (output.length < 2 * 1024 * 1024) output.append(current).append('\n')
+                        }
+                        runCatching { onOutputLine?.invoke(current) }
+                    }
+                }
+            } catch (error: IOException) {
+                Log.w(TAG, "Command output stream closed: ${error.message}")
+            }
+        }, "intelli-command-output").apply { isDaemon = true; start() }
+        val completed = try {
+            process.waitFor(timeoutSeconds.coerceIn(1, 900), TimeUnit.SECONDS)
+        } catch (interrupted: InterruptedException) {
+            process.destroyForcibly()
+            Thread.currentThread().interrupt()
+            throw CancellationException("Command cancelled").apply { initCause(interrupted) }
+        }
+        if (!completed) process.destroyForcibly()
+        reader.join(1_000)
+        if (!completed) synchronized(output) { output.append("\n[Process timed out after ${timeoutSeconds}s]") }
+        return (if (completed) process.exitValue() else 124) to synchronized(output) { output.toString().trim() }
     }
 
     fun clearAppDataAndReset(context: Context) {

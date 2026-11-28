@@ -460,3 +460,12 @@ Intelli is free software, provided as is, without warranty, as described in the 
 ## License
 
 Copyright (C) 2026 spidertox. Licensed under the [GNU General Public License v3.0](LICENSE) or any later version.
+
+
+## Device Access
+
+Intelli includes a provider-aware command console for its existing terminal environment, ADB/Wireless debugging, Shizuku, optional Root, Ubuntu PRoot, and configured SSH. Provider errors never silently switch execution context. Root commands require confirmation of the exact command. The Shizuku provider uses the official Shizuku API and permission flow.
+
+Ubuntu currently runs through PRoot and is not a genuine root chroot. Intelli does not claim that PRoot provides Android root. The optional rooted chroot installs a pinned Ubuntu Base arm64 rootfs and verifies its SHA-256 before extraction; it uses a private mount namespace and requires a compatible root manager/kernel. Runtime support varies by device.
+
+Guides: [Architecture](docs/DEVICE_ACCESS_ARCHITECTURE.md) · [ADB](docs/ADB_SETUP.md) · [Wireless ADB](docs/WIRELESS_ADB_SETUP.md) · [Shizuku](docs/SHIZUKU_SETUP.md) · [Root](docs/ROOT_SETUP.md) · [Ubuntu](docs/UBUNTU_CHROOT_SETUP.md) · [Security](docs/DEVICE_ACCESS_SECURITY.md) · [Testing](docs/DEVICE_ACCESS_TESTING.md).

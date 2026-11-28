@@ -89,3 +89,6 @@
 }
 # WorkManager's Room database is created by reflection; R8 full mode strips its no-arg constructor.
 -keep class * extends androidx.room.RoomDatabase { <init>(); }
+
+# Shizuku loads this AIDL binder class by its component name from the installed APK.
+-keep class com.example.gemini.data.deviceaccess.shizuku.DeviceCommandUserService { *; }

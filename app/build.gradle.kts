@@ -10,6 +10,9 @@ val parsedVersion = if (versionFile.exists()) {
 
 val appVersionCode = (parsedVersion["version_code"] as? Number)?.toInt() ?: 1
 val appVersionName = (parsedVersion["version_name"] as? String) ?: "1.0.0"
+val releaseStorePath = providers.environmentVariable("RELEASE_KEYSTORE_PATH").orNull ?: "release.jks"
+val releaseStorePassword = providers.environmentVariable("RELEASE_KEYSTORE_PASSWORD").orNull
+val releaseKeyPassword = providers.environmentVariable("RELEASE_KEY_PASSWORD").orNull
 
 // The IDE bridge (Go) reports the same version as the app: its build embeds a copy of version.json, refreshed here on
 // every Gradle build so the two can never differ and nobody has to remember it.
@@ -43,10 +46,11 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file("release.jks")
-            storePassword = "123456"
+            storeFile = file(releaseStorePath)
+            storePassword = releaseStorePassword
             keyAlias = "antigem"
-            keyPassword = "123456"        }
+            keyPassword = releaseKeyPassword
+        }
     }
 
     flavorDimensions += "mode"
@@ -109,7 +113,7 @@ android {
 
     buildFeatures {
       compose = true
-      aidl = false
+      aidl = true
       buildConfig = true
       shaders = false
     }
@@ -151,6 +155,8 @@ dependencies {
   // Core Android dependencies
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.lifecycle.runtime.ktx)
+  implementation(libs.shizuku.api)
+  implementation(libs.shizuku.provider)
   implementation(libs.androidx.activity.compose)
   implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
   implementation("androidx.work:work-runtime-ktx:2.10.0")
