@@ -1,0 +1,1413 @@
+package ai.intelli.ui.components
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.*
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.DataObject
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextOverflow
+import coil.compose.AsyncImage
+import android.net.Uri
+import android.content.Intent
+import java.io.File
+import ai.intelli.data.remote.HubMediaResolver
+import kotlinx.coroutines.launch
+import ai.intelli.domain.model.ChatMessage
+import ai.intelli.domain.model.MessageRole
+import ai.intelli.theme.ClaudeTerracotta
+import ai.intelli.theme.GeminiBlue
+import androidx.compose.material.icons.rounded.HeadsetMic
+import kotlinx.coroutines.delay
+import java.text.NumberFormat
+import java.util.Locale
+import ai.intelli.i18n.L
+
+@Composable
+fun MessageBubble(
+    message: ChatMessage,
+    modelId: String = "gemini",
+    isDevModeEnabled: Boolean = false,
+    onEdit: (ChatMessage) -> Unit = {},
+    onRetry: (ChatMessage) -> Unit = {},
+    onApproveTool: ((ai.intelli.domain.model.ToolCall, String) -> Unit)? = null,
+    onRejectTool: ((ai.intelli.domain.model.ToolCall, String) -> Unit)? = null,
+    onTerminateTool: ((ai.intelli.domain.model.ToolCall, String) -> Unit)? = null,
+    onSubmitChoices: ((ai.intelli.domain.model.ToolCall, String, List<ai.intelli.data.remote.dto.AskQuestionResponseItemDto>, String) -> Unit)? = null,
+    onSkipChoices: ((ai.intelli.domain.model.ToolCall, String, List<ai.intelli.data.remote.dto.AskQuestionResponseItemDto>) -> Unit)? = null,
+    onUpdateSummary: ((String) -> Unit)? = null,
+    onDeleteSummary: (() -> Unit)? = null,
+    onViewRawPayload: ((String) -> Unit)? = null,
+    onShowArtifacts: (() -> Unit)? = null,
+    artifactsCount: Int = 0,
+    summarizingModelName: String = "AI",
+    pendingQueuedUserMessage: String? = null,
+    /** The token, cache and time stats under the reply (Settings → Appearance). */
+    showStats: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+
+    if (message.role == MessageRole.SUMMARY) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+        ) {
+            if (message.isStreaming) {
+                LiveSummarizingCard(
+                    modelName = summarizingModelName,
+                    pendingQueuedMessage = pendingQueuedUserMessage
+                )
+            } else {
+                ActiveContextSummaryCard(
+                    summaryText = message.content,
+                    onEditSummary = { onUpdateSummary?.invoke(it) },
+                    onDeleteSummary = { onDeleteSummary?.invoke() }
+                )
+            }
+        }
+        return
+    }
+
+    val isUser = message.role == MessageRole.USER
+    var showUserActions by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(
+                start = 16.dp,
+                end = 16.dp,
+                top = if (isUser) 20.dp else 4.dp,
+                bottom = if (isUser) 6.dp else 10.dp
+            ),
+        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
+    ) {
+        val hasActiveRunningTool = message.toolCalls.any { it.status == "RUNNING" || it.status == "PENDING_APPROVAL" || it.status == "AWAITING_CHOICE" }
+
+        // Thinking block (for assistant responses)
+        if (!isUser && !message.thoughtText.isNullOrEmpty()) {
+            ThinkingAccordion(
+                thoughtText = message.thoughtText,
+                durationMs = message.thoughtDurationMs,
+                isStreaming = message.isStreaming && !hasActiveRunningTool
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
+        // Context Compaction / Summary Banner (if this turn contains a summary)
+        if (!message.contextSummary.isNullOrBlank() && message.contextSummary != "null") {
+            ContextSummaryCheckpointBanner(summaryText = message.contextSummary)
+        }
+
+        // Message Content Bubble
+        if (isUser) {
+            Column(horizontalAlignment = Alignment.End) {
+                Box(
+                    modifier = Modifier
+                        .widthIn(max = 320.dp)
+                        .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        // TalkBack: the actions under the bubble are also in its actions menu (no need to open the row).
+                        // A heading: TalkBack's heading navigation jumps prompt to prompt in a long chat (the reply follows each)
+                        .semantics {
+                            heading()
+                            customActions = buildList {
+                                add(CustomAccessibilityAction(L.common.copy) {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("Copied Prompt", message.content))
+                                    Toast.makeText(context, L.components.messageBubble.copiedPrompt, Toast.LENGTH_SHORT).show()
+                                    true
+                                })
+                                add(CustomAccessibilityAction(L.components.messageBubble.editPrompt) { onEdit(message); true })
+                                add(CustomAccessibilityAction(L.components.messageBubble.retryPrompt) { onRetry(message); true })
+                                val payload = message.rawContent ?: message.rawPayload
+                                if (!payload.isNullOrBlank()) {
+                                    add(CustomAccessibilityAction(L.components.messageBubble.viewRawRequestPayload) { onViewRawPayload?.invoke(payload); true })
+                                }
+                            }
+                        }
+                        .clickable(onClickLabel = if (showUserActions) L.components.a11y.hideMessageActions else L.components.a11y.showMessageActions) { showUserActions = !showUserActions }
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    SelectionContainer {
+                        Text(
+                            text = message.content,
+                            fontSize = 15.sp,
+                            lineHeight = 22.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                // Action icons shown on tap/press below sent user message
+                AnimatedVisibility(
+                    visible = showUserActions,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(top = 4.dp, end = 2.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Copy Prompt
+                        IconButton(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = ClipData.newPlainText("Copied Prompt", message.content)
+                                clipboard.setPrimaryClip(clip)
+                                Toast.makeText(context, L.components.messageBubble.copiedPrompt, Toast.LENGTH_SHORT).show()
+                                showUserActions = false
+                            },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.ContentCopy,
+                                contentDescription = L.common.copy,
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        // Edit Prompt
+                        IconButton(
+                            onClick = {
+                                onEdit(message)
+                                showUserActions = false
+                            },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Edit,
+                                contentDescription = L.components.messageBubble.editPrompt,
+                                tint = ClaudeTerracotta,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        // Retry Prompt
+                        IconButton(
+                            onClick = {
+                                onRetry(message)
+                                showUserActions = false
+                            },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Refresh,
+                                contentDescription = L.components.messageBubble.retryPrompt,
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        val payloadToShow = message.rawContent ?: message.rawPayload
+                        if (!payloadToShow.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            IconButton(
+                                onClick = {
+                                    onViewRawPayload?.invoke(payloadToShow)
+                                    showUserActions = false
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.DataObject,
+                                    contentDescription = L.components.messageBubble.viewRawRequestPayload,
+                                    tint = ai.intelli.theme.AppColors.accentTeal,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Assistant response
+            Column(modifier = Modifier.fillMaxWidth()) {
+                if (message.content.isNotEmpty() || message.toolCalls.isNotEmpty()) {
+                    SelectionContainer {
+                        MarkdownContent(
+                            content = message.content,
+                            toolCalls = message.toolCalls,
+                            onApproveTool = if (onApproveTool != null) { toolCall -> onApproveTool(toolCall, message.id) } else null,
+                            onRejectTool = if (onRejectTool != null) { toolCall -> onRejectTool(toolCall, message.id) } else null,
+                            onTerminateTool = if (onTerminateTool != null) { toolCall -> onTerminateTool(toolCall, message.id) } else null,
+                            onSubmitChoices = if (onSubmitChoices != null) { toolCall, responses, summary -> onSubmitChoices(toolCall, message.id, responses, summary) } else null,
+                            onSkipChoices = if (onSkipChoices != null) { toolCall, responses -> onSkipChoices(toolCall, message.id, responses) } else null
+                        )
+                    }
+
+                } else if (message.isStreaming && !hasActiveRunningTool && message.content.isEmpty() && message.thoughtText.isNullOrEmpty() && message.toolCalls.isEmpty()) {
+                    ModelTypingIndicator(modelId = modelId)
+                }
+
+                // Token Telemetry and Action Icons (Copy, Retry, Raw Payload, Artifacts)
+                if (!message.isStreaming && message.content.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp)
+                    ) {
+                        // Token & Cache Telemetry Badge (Displayed just above action icons)
+                        if (showStats && message.tokenUsage != null) {
+                            val payloadToShow = message.rawContent ?: message.rawPayload
+                            TokenUsageTelemetryPill(
+                                usage = message.tokenUsage,
+                                onViewPayload = if (!payloadToShow.isNullOrBlank()) {
+                                    { onViewRawPayload?.invoke(payloadToShow) }
+                                } else null
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Start,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    val clip = ClipData.newPlainText("Copied Response", MemoryBlocks.strip(message.content))
+                                    clipboard.setPrimaryClip(clip)
+                                    Toast.makeText(context, L.components.messageBubble.copiedResponse, Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ContentCopy,
+                                    contentDescription = L.components.messageBubble.copyMessage,
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(4.dp))
+
+                            IconButton(
+                                onClick = { onRetry(message) },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Refresh,
+                                    contentDescription = L.components.messageBubble.regenerateResponse,
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+
+                            val payloadToShow = message.rawContent ?: message.rawPayload
+                            if (!payloadToShow.isNullOrBlank()) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = { onViewRawPayload?.invoke(payloadToShow) },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.DataObject,
+                                        contentDescription = L.components.messageBubble.viewRawRequestPayload,
+                                        tint = ai.intelli.theme.AppColors.accentTeal,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+
+                            if (onShowArtifacts != null && artifactsCount > 0) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = onShowArtifacts,
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Layers,
+                                        contentDescription = L.components.a11y.viewArtifacts(artifactsCount),
+                                        tint = ClaudeTerracotta,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun UserMessageBubble(
+    message: ChatMessage,
+    isLastUserMessage: Boolean = false,
+    isDevModeEnabled: Boolean = false,
+    onEdit: (ChatMessage) -> Unit = {},
+    onRetry: (ChatMessage) -> Unit = {},
+    onViewRawPayload: ((String) -> Unit)? = null,
+    /** false in a read-only chat: no "undo and edit". */
+    canEdit: Boolean = true,
+    /** The project checkpoint saved right before this message (Settings → Project checkpoints), if any. */
+    checkpoint: ai.intelli.data.checkpoint.CheckpointSummary? = null,
+    /** Opens "go back to before this message" (files and/or chat). */
+    onRestoreCheckpoint: ((ChatMessage) -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var showUserActions by remember { mutableStateOf(false) }
+    var previewImageUrl by remember { mutableStateOf<String?>(null) }
+    // the prompt as it was sent, hidden parts included (for debugging)
+    var showFullPrompt by remember { mutableStateOf(false) }
+    if (showFullPrompt) {
+        FullPromptDialog(prompt = fullPromptOf(message), attachmentCount = message.attachments.size, onDismiss = { showFullPrompt = false })
+    }
+
+    if (previewImageUrl != null) {
+        FullScreenImageDialog(
+            imageUrl = previewImageUrl!!,
+            title = L.components.messageBubble.imagePreview,
+            onDismiss = { previewImageUrl = null }
+        )
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 6.dp),
+        horizontalAlignment = Alignment.End
+    ) {
+        if (!message.contextSummary.isNullOrBlank() && message.contextSummary != "null") {
+            ContextSummaryCheckpointBanner(summaryText = message.contextSummary)
+        }
+
+        // After "Show less" on a message taller than the screen, the list would otherwise be left
+        // scrolled past it, so collapsing looks like it did nothing
+        val bubbleBringIntoView = remember { BringIntoViewRequester() }
+        var collapseRequests by remember { mutableIntStateOf(0) }
+        LaunchedEffect(collapseRequests) {
+            if (collapseRequests > 0) {
+                withFrameNanos { }
+                bubbleBringIntoView.bringIntoView()
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .widthIn(max = 330.dp)
+                .bringIntoViewRequester(bubbleBringIntoView)
+                .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                // TalkBack: the actions under the bubble are also in its actions menu (no need to open the row).
+                // A heading: TalkBack's heading navigation jumps prompt to prompt in a long chat (the reply follows each)
+                .semantics {
+                    heading()
+                    customActions = buildList {
+                        add(CustomAccessibilityAction(L.common.copy) {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Copied Prompt", message.content))
+                            Toast.makeText(context, L.components.messageBubble.copiedPrompt, Toast.LENGTH_SHORT).show()
+                            true
+                        })
+                        add(CustomAccessibilityAction(L.components.messageBubble.viewFullPrompt) { showFullPrompt = true; true })
+                        if (canEdit) add(CustomAccessibilityAction(L.components.messageBubble.undoAndEditPrompt) { onEdit(message); true })
+                        if (checkpoint != null && onRestoreCheckpoint != null) {
+                            add(CustomAccessibilityAction(L.components.messageBubble.restoreToBeforeThisMessage) { onRestoreCheckpoint(message); true })
+                        }
+                        val payload = message.rawContent ?: message.rawPayload
+                        if (isDevModeEnabled && !payload.isNullOrBlank()) {
+                            add(CustomAccessibilityAction(L.components.messageBubble.viewRawRequestPayload) { onViewRawPayload?.invoke(payload); true })
+                        }
+                    }
+                }
+                .clickable(onClickLabel = if (showUserActions) L.components.a11y.hideMessageActions else L.components.a11y.showMessageActions) { showUserActions = !showUserActions }
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 1. Audio attachments player
+                val audioAtts = remember(message.attachments) { message.attachments.filter { it.isAudio } }
+                for (att in audioAtts) {
+                    ChatAudioPlayer(attachment = att)
+                }
+
+                // 2. Image attachments preview
+                val imageAtts = remember(message.attachments) {
+                    message.attachments.filter {
+                        // an image sent only by path (too big to shrink, TIFF, …) is a file card that opens it
+                        !(it.reference && it.base64.isNullOrBlank()) && (
+                            it.isImage || it.name.endsWith(".jpg", true) || it.name.endsWith(".png", true) ||
+                                it.name.endsWith(".jpeg", true) || it.name.endsWith(".webp", true) ||
+                                it.name.endsWith(".gif", true) || it.mimeType?.startsWith("image/") == true
+                        )
+                    }
+                }
+                if (imageAtts.isNotEmpty()) {
+                    UserMessageImagesGrid(
+                        attachments = imageAtts,
+                        onImageClick = { previewImageUrl = it }
+                    )
+                }
+
+                // 3. Document / other attachments
+                val docAtts = remember(message.attachments, imageAtts) {
+                    message.attachments.filter { !it.isAudio && !imageAtts.contains(it) }
+                }
+                if (docAtts.isNotEmpty()) {
+                    for (doc in docAtts) {
+                        UserMessageDocumentItem(attachment = doc)
+                    }
+                }
+
+                // a request said in an Antigravity voice call (the bubble shows what was said, not the call's prompt)
+                if (message.viaVoice) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Rounded.HeadsetMic,
+                            contentDescription = null,
+                            tint = GeminiBlue,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(L.common.voice, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = GeminiBlue)
+                    }
+                }
+
+                // 4. Text content (if not just placeholder "Voice note")
+                val displayContent = remember(message.content) { formatUserDisplayContent(message.content) }
+                val lineCount = remember(displayContent) { displayContent.lines().size }
+                // Keyed on the message so an edited/resent prompt always starts collapsed
+                var isTextExpanded by remember(message.id, displayContent) { mutableStateOf(false) }
+                // Measured, not guessed: wrapped lines count too, and short text never gets the toggle
+                var isTextOverflowing by remember(message.id, displayContent) { mutableStateOf(false) }
+
+                // Slash commands that expanded (plugins, custom commands) stand out from the typed text
+                val styledContent = remember(displayContent) {
+                    val ranges = ai.intelli.data.remote.PromptExpansion.commandRanges(displayContent)
+                    androidx.compose.ui.text.buildAnnotatedString {
+                        append(displayContent)
+                        ranges.forEach {
+                            addStyle(
+                                androidx.compose.ui.text.SpanStyle(
+                                    color = ClaudeTerracotta,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                it.first, it.last + 1
+                            )
+                        }
+                    }
+                }
+                if (displayContent.isNotBlank() && !(audioAtts.isNotEmpty() && (displayContent == "Voice note" || displayContent == "Voice message"))) {
+                    Column {
+                        SelectionContainer {
+                            Text(
+                                text = styledContent,
+                                fontSize = 15.sp,
+                                lineHeight = 22.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = if (isTextExpanded) Int.MAX_VALUE else 6,
+                                overflow = TextOverflow.Ellipsis,
+                                onTextLayout = { if (!isTextExpanded) isTextOverflowing = it.hasVisualOverflow }
+                            )
+                        }
+                        if (isTextExpanded || isTextOverflowing) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    // TalkBack: "Expanded" / "Collapsed"
+                                    .semantics { stateDescription = if (isTextExpanded) L.components.a11y.expanded else L.components.a11y.collapsed }
+                                    .clickable(role = Role.Button) {
+                                        if (isTextExpanded) collapseRequests++
+                                        isTextExpanded = !isTextExpanded
+                                    }
+                                    .padding(vertical = 2.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val toggleText = if (isTextExpanded) L.components.messageBubble.showLess else L.components.messageBubble.showMoreLinecountLines(lineCount)
+                                Text(
+                                    text = toggleText,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = ClaudeTerracotta,
+                                    // read without the ▲ / ▼ ("black down-pointing triangle")
+                                    modifier = Modifier.clearAndSetSemantics { contentDescription = toggleText.replace("▲", "").replace("▼", "").trim() }
+                                )
+                            }
+                        }
+                    }
+                }
+                // what the voice said while handing the request to the agent
+                if (message.viaVoice && !message.voiceLine.isNullOrBlank()) {
+                    Text(
+                        text = "“${message.voiceLine}…”",
+                        fontSize = 12.5.sp,
+                        lineHeight = 17.sp,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                    )
+                }
+            }
+        }
+
+        // a project checkpoint was saved right before this message: one tap to go back to it
+        if (checkpoint != null && onRestoreCheckpoint != null) {
+            Row(
+                modifier = Modifier
+                    .padding(top = 5.dp, end = 2.dp)
+                    .clip(RoundedCornerShape(50))
+                    .clickable(role = Role.Button) { onRestoreCheckpoint(message) }
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.History,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    modifier = Modifier.size(12.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = L.components.messageBubble.restorePoint,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                )
+            }
+        }
+
+        // Action icons shown on tap/press below sent user message
+        AnimatedVisibility(
+            visible = showUserActions,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Row(
+                modifier = Modifier.padding(top = 4.dp, end = 2.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Copy Prompt
+                IconButton(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = ClipData.newPlainText("Copied Prompt", message.content)
+                        clipboard.setPrimaryClip(clip)
+                        Toast.makeText(context, L.components.messageBubble.copiedPrompt, Toast.LENGTH_SHORT).show()
+                        showUserActions = false
+                    },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ContentCopy,
+                        contentDescription = L.common.copy,
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+
+                // The full prompt as sent, hidden parts included
+                Spacer(modifier = Modifier.width(4.dp))
+                IconButton(
+                    onClick = {
+                        showFullPrompt = true
+                        showUserActions = false
+                    },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Visibility,
+                        contentDescription = L.components.messageBubble.viewFullPrompt,
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+
+                // Edit Prompt
+                if (canEdit) Spacer(modifier = Modifier.width(4.dp))
+                if (canEdit) IconButton(
+                    onClick = {
+                        onEdit(message)
+                        showUserActions = false
+                    },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Edit,
+                        contentDescription = L.components.messageBubble.undoAndEditPrompt,
+                        tint = ClaudeTerracotta,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+
+                // Go back to the project checkpoint saved before this message
+                if (checkpoint != null && onRestoreCheckpoint != null) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(
+                        onClick = {
+                            onRestoreCheckpoint(message)
+                            showUserActions = false
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.History,
+                            contentDescription = L.components.messageBubble.restoreToBeforeThisMessage,
+                            tint = ai.intelli.theme.AppColors.info,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                val payloadToShow = message.rawContent ?: message.rawPayload
+                if (isDevModeEnabled && !payloadToShow.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(
+                        onClick = {
+                            onViewRawPayload?.invoke(payloadToShow)
+                            showUserActions = false
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.DataObject,
+                            contentDescription = L.components.messageBubble.viewRawRequestPayload,
+                            tint = ai.intelli.theme.AppColors.accentTeal,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AssistantMessageFooter(
+    message: ChatMessage,
+    isDevModeEnabled: Boolean = false,
+    onRetry: (ChatMessage) -> Unit = {},
+    onViewRawPayload: ((String) -> Unit)? = null,
+    onShowArtifacts: (() -> Unit)? = null,
+    artifactsCount: Int = 0,
+    /** false in a read-only chat: no "regenerate". */
+    canRetry: Boolean = true,
+    /** The token, cache and time stats above the actions (Settings → Appearance). */
+    showStats: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp)
+    ) {
+        // Token & Cache Telemetry Badge (Displayed just above action icons)
+        if (showStats && message.tokenUsage != null) {
+            val payloadToShow = message.rawContent ?: message.rawPayload
+            TokenUsageTelemetryPill(
+                usage = message.tokenUsage,
+                onViewPayload = if (!payloadToShow.isNullOrBlank()) {
+                    { onViewRawPayload?.invoke(payloadToShow) }
+                } else null
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val clip = ClipData.newPlainText("Copied Response", MemoryBlocks.strip(message.content))
+                    clipboard.setPrimaryClip(clip)
+                    Toast.makeText(context, L.components.messageBubble.copiedResponse, Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.ContentCopy,
+                    contentDescription = L.components.messageBubble.copyMessage,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
+
+            // the whole reply in one selection area (the feed selects one block at a time)
+            var showSelectText by remember { mutableStateOf(false) }
+            IconButton(
+                onClick = { showSelectText = true },
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.SelectAll,
+                    contentDescription = L.components.messageBubble.selectText,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            if (showSelectText) {
+                SelectTextSheet(content = message.content) { showSelectText = false }
+            }
+
+            if (canRetry) Spacer(modifier = Modifier.width(4.dp))
+
+            // a mistaken tap must not replace the reply: ask first
+            var confirmRetry by remember { mutableStateOf(false) }
+            if (canRetry) IconButton(
+                onClick = { confirmRetry = true },
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Refresh,
+                    contentDescription = L.components.messageBubble.regenerateResponse,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            if (confirmRetry) {
+                AlertDialog(
+                    onDismissRequest = { confirmRetry = false },
+                    title = { Text(L.components.messageBubble.regenerateResponse2, fontWeight = FontWeight.Bold) },
+                    text = {
+                        Text(
+                            L.components.messageBubble.theSameMessageIsSentAgain,
+                            fontSize = 14.sp
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            confirmRetry = false
+                            onRetry(message)
+                        }) { Text(L.components.messageBubble.regenerate, color = ClaudeTerracotta, fontWeight = FontWeight.Bold) }
+                    },
+                    dismissButton = { TextButton(onClick = { confirmRetry = false }) { Text(L.common.cancel) } }
+                )
+            }
+
+            val payloadToShow = message.rawContent ?: message.rawPayload
+            if (!payloadToShow.isNullOrBlank()) {
+                Spacer(modifier = Modifier.width(4.dp))
+                IconButton(
+                    onClick = { onViewRawPayload?.invoke(payloadToShow) },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.DataObject,
+                        contentDescription = L.components.messageBubble.viewRawRequestPayload,
+                        tint = ai.intelli.theme.AppColors.accentTeal,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+
+            if (onShowArtifacts != null && artifactsCount > 0) {
+                Spacer(modifier = Modifier.width(4.dp))
+                IconButton(
+                    onClick = onShowArtifacts,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Layers,
+                        contentDescription = L.components.a11y.viewArtifacts(artifactsCount),
+                        tint = ClaudeTerracotta,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+private val WAITING_PHRASES get() = listOf(
+    L.components.messageBubble.consultingAgy,
+    L.components.messageBubble.cookingResponse,
+    L.components.messageBubble.craftingAnswer,
+    L.components.messageBubble.gatheringContext,
+    L.components.messageBubble.workingOnIt,
+    L.components.messageBubble.synthesizing,
+    L.components.messageBubble.connectingDots,
+    L.components.messageBubble.analyzingRequest,
+    L.components.messageBubble.formulatingResponse
+)
+
+@Composable
+fun ModelTypingIndicator(
+    modelId: String,
+    modifier: Modifier = Modifier
+) {
+    var phraseIndex by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        phraseIndex = (0 until WAITING_PHRASES.size).random()
+        while (true) {
+            delay(3500L)
+            phraseIndex = (phraseIndex + 1) % WAITING_PHRASES.size
+        }
+    }
+
+    val phrase = WAITING_PHRASES.getOrElse(phraseIndex) { WAITING_PHRASES[0] }
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = ClaudeTerracotta.copy(alpha = 0.08f),
+        border = BorderStroke(1.dp, ClaudeTerracotta.copy(alpha = 0.22f))
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            WaitingDotsText(phrase = phrase)
+        }
+    }
+}
+
+@Composable
+private fun WaitingDotsText(phrase: String) {
+    val dots by produceState(initialValue = ".") {
+        var count = 1
+        while (true) {
+            delay(500L)
+            count = (count % 3) + 1
+            value = ".".repeat(count)
+        }
+    }
+
+    Text(
+        text = "$phrase$dots",
+        fontSize = 12.5.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = ClaudeTerracotta,
+        letterSpacing = 0.2.sp,
+        // the dots change every half second: TalkBack gets the phrase only
+        modifier = Modifier.clearAndSetSemantics { contentDescription = phrase }
+    )
+}
+
+fun formatDuration(durationMs: Long): String {
+    if (durationMs <= 0) return ""
+    val totalSeconds = (durationMs + 500) / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return when {
+        minutes > 0 && seconds > 0 -> L.components.messageBubble.minutesMSecondsS(minutes, seconds)
+        minutes > 0 -> "${minutes}m"
+        durationMs < 1000 -> "${durationMs}ms"
+        totalSeconds < 10 -> String.format(Locale.US, "%.1fs", durationMs / 1000f)
+        else -> "${seconds}s"
+    }
+}
+
+private fun formatCompactTokens(count: Int): String {
+    return when {
+        count >= 1_000_000 -> String.format(Locale.US, "%.1fM", count / 1_000_000f).replace(".0M", "M")
+        count >= 1_000 -> String.format(Locale.US, "%.1fk", count / 1_000f).replace(".0k", "k")
+        else -> count.toString()
+    }
+}
+
+@Composable
+fun TokenUsageTelemetryPill(
+    usage: ai.intelli.domain.model.TokenUsage,
+    onViewPayload: (() -> Unit)? = null
+) {
+    val cachePct = if (usage.promptTokens > 0 && usage.cachedTokens > 0) {
+        ((usage.cachedTokens.toDouble() / (usage.promptTokens + usage.cachedTokens)) * 100).toInt().coerceIn(0, 100)
+    } else 0
+
+    val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val inputColor = ai.intelli.theme.AppColors.info
+    val outputColor = ai.intelli.theme.AppColors.success
+    val cacheColor = ai.intelli.theme.AppColors.warning
+    // tap: the reply's full usage and model (the raw payload, when there is one, opens from there)
+    var showDetails by remember { mutableStateOf(false) }
+
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.45f else 0.7f),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDark) 0.12f else 0.18f)),
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClickLabel = L.common.details, role = Role.Button) { showDetails = true }
+    ) {
+        // one line, always: the model name gives way (…) before anything wraps
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 7.dp, vertical = 3.dp)
+                // TalkBack: exact counts in words, not "inbox tray 12k, outbox tray 3k, high voltage…"
+                .clearAndSetSemantics {
+                    contentDescription = buildList {
+                        add(L.components.a11y.tokenUsage(usage.promptTokens, usage.outputTokens))
+                        if (usage.cachedTokens > 0) add("${L.components.tokenUsageDetails.cacheRead} ${usage.cachedTokens} ($cachePct%)")
+                        if (usage.durationMs > 0) add("${L.components.tokenUsageDetails.time} ${formatDuration(usage.durationMs)}")
+                        usage.model?.takeIf { it.isNotBlank() }?.let { add("${L.components.tokenUsageDetails.model} ${shortModelName(it)}") }
+                        if (usage.isEstimated) add(L.components.tokenUsageDetails.tokenCountsAreEstimates)
+                    }.joinToString(", ")
+                },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = "📥 ${formatCompactTokens(usage.promptTokens)}",
+                fontSize = 10.5.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                color = inputColor,
+                maxLines = 1,
+                softWrap = false
+            )
+            Text(
+                text = "📤 ${formatCompactTokens(usage.outputTokens)}",
+                fontSize = 10.5.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                color = outputColor,
+                maxLines = 1,
+                softWrap = false
+            )
+            if (usage.cachedTokens > 0) {
+                Text(
+                    text = "⚡ ${formatCompactTokens(usage.cachedTokens)} ($cachePct%)",
+                    fontSize = 10.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = cacheColor,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+            if (usage.durationMs > 0) {
+                Text(
+                    text = "⏱️ ${formatDuration(usage.durationMs)}",
+                    fontSize = 10.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+            usage.model?.takeIf { it.isNotBlank() }?.let { model ->
+                Text(
+                    text = shortModelName(model),
+                    fontSize = 10.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            }
+            if (usage.isEstimated) {
+                Text(
+                    text = "(est.)",
+                    fontSize = 9.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+        }
+    }
+    if (showDetails) {
+        TokenUsageDetailsSheet(usage, onViewPayload) { showDetails = false }
+    }
+}
+
+@Composable
+fun ContextSummaryCheckpointBanner(
+    summaryText: String,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            // TalkBack: "Expanded" / "Collapsed"
+            .semantics { stateDescription = if (expanded) L.components.a11y.expanded else L.components.a11y.collapsed }
+            .clickable(
+                role = Role.Button,
+                onClickLabel = if (expanded) L.common.hide else L.common.show
+            ) { expanded = !expanded },
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        border = BorderStroke(1.dp, ClaudeTerracotta.copy(alpha = 0.35f))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = L.components.messageBubble.contextCompactedHistorySummarized,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ClaudeTerracotta,
+                    // read without the 🧠 ("brain")
+                    modifier = Modifier.weight(1f).clearAndSetSemantics {
+                        contentDescription = L.components.messageBubble.contextCompactedHistorySummarized.replace("🧠", "").trim()
+                    }
+                )
+                Text(
+                    text = if (expanded) "Hide ▲" else L.components.messageBubble.showDetails,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    // read without the ▲ / ▼
+                    modifier = Modifier.clearAndSetSemantics {
+                        contentDescription = if (expanded) L.common.hide else L.components.messageBubble.showDetails.replace("▼", "").trim()
+                    }
+                )
+            }
+
+            if (expanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                Spacer(modifier = Modifier.height(8.dp))
+                SelectionContainer {
+                    Text(
+                        text = summaryText,
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatUserDisplayContent(content: String): String {
+    return content.trim()
+}
+
+@Composable
+private fun UserMessageImageItem(
+    attachment: ai.intelli.domain.model.ChatAttachment,
+    modifier: Modifier = Modifier,
+    onImageClick: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val rawUri = remember(attachment) {
+        val path = attachment.path
+        when {
+            !attachment.localUri.isNullOrBlank() -> attachment.localUri
+            !attachment.url.isNullOrBlank() -> ai.intelli.data.preferences.AuthPreferences.rebaseBridgeUrl(attachment.url)
+            path.startsWith("data:image/") || path.startsWith("http://") || path.startsWith("https://") || path.startsWith("content://") -> path
+            path.startsWith("file://") -> path
+            path.isNotBlank() -> "file://$path"
+            else -> ""
+        }
+    }
+    val memKey = remember(rawUri) { HubMediaResolver.normalizeKey(rawUri) }
+    var resolvedUri by remember(rawUri) {
+        mutableStateOf(if (rawUri.isNotBlank()) HubMediaResolver.getResolvedUriSync(context, rawUri) else "")
+    }
+
+    LaunchedEffect(rawUri) {
+        if (rawUri.isNotBlank() && !HubMediaResolver.isLocalOrCached(context, rawUri)) {
+            val res = HubMediaResolver.resolveMediaUri(context, rawUri)
+            if (res.isNotBlank()) {
+                resolvedUri = res
+            }
+        }
+    }
+
+    // a bridge file needs the authenticated fetch above; Coil alone would be refused
+    val finalUri = resolvedUri.ifBlank { if (HubMediaResolver.isBridgeFileUrl(rawUri)) "" else rawUri }
+    val coilData: Any? = remember(finalUri, attachment.base64, memKey) {
+        val cachedFile = HubMediaResolver.cachedFile(memKey)
+        when {
+            cachedFile != null -> cachedFile
+            finalUri.startsWith("data:image/") -> {
+                try {
+                    val b64 = finalUri.substringAfter("base64,")
+                    android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+                } catch (e: Exception) {
+                    finalUri
+                }
+            }
+            !attachment.base64.isNullOrBlank() -> {
+                try {
+                    android.util.Base64.decode(attachment.base64, android.util.Base64.DEFAULT)
+                } catch (e: Exception) {
+                    finalUri
+                }
+            }
+            finalUri.isNotBlank() -> finalUri
+            else -> null
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .clickable(role = Role.Button, onClickLabel = L.components.a11y.viewImage) {
+                when {
+                    finalUri.isNotBlank() -> onImageClick(finalUri)
+                    // image kept only as data (e.g. a reopened Claude chat)
+                    !attachment.base64.isNullOrBlank() -> onImageClick("data:${attachment.mimeType ?: "image/jpeg"};base64,${attachment.base64}")
+                }
+            }
+    ) {
+        if (coilData != null) {
+            AsyncImage(
+                model = coil.request.ImageRequest.Builder(context)
+                    .data(coilData)
+                    .memoryCacheKey(memKey.ifBlank { null })
+                    .crossfade(false)
+                    .listener(
+                        onSuccess = { _, _ -> android.util.Log.d("ANTI_MEDIA", "AsyncImage: Loaded successfully for ${attachment.name}") },
+                        onError = { _, res -> android.util.Log.e("ANTI_MEDIA", "AsyncImage: Failed for ${attachment.name}: ${res.throwable.message}") }
+                    )
+                    .build(),
+                contentDescription = attachment.name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
+@Composable
+private fun UserMessageImagesGrid(
+    attachments: List<ai.intelli.domain.model.ChatAttachment>,
+    onImageClick: (String) -> Unit
+) {
+    if (attachments.isEmpty()) return
+
+    if (attachments.size == 1) {
+        UserMessageImageItem(
+            attachment = attachments.first(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(180.dp),
+            onImageClick = onImageClick
+        )
+    } else if (attachments.size == 2) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            for (att in attachments) {
+                UserMessageImageItem(
+                    attachment = att,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(130.dp),
+                    onImageClick = onImageClick
+                )
+            }
+        }
+    } else {
+        // 3 or more images: chunked in rows of 2
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            val chunks = attachments.chunked(2)
+            for (row in chunks) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    for (att in row) {
+                        UserMessageImageItem(
+                            attachment = att,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(110.dp),
+                            onImageClick = onImageClick
+                        )
+                    }
+                    if (row.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UserMessageDocumentItem(
+    attachment: ai.intelli.domain.model.ChatAttachment
+) {
+    val context = LocalContext.current
+    val fileLinkHandler = LocalFileLinkHandler.current
+    val scope = rememberCoroutineScope()
+
+    val isText = remember(attachment) {
+        val mime = attachment.mimeType?.lowercase() ?: ""
+        val ext = (attachment.name.ifBlank { attachment.path }).substringAfterLast('.', "").lowercase()
+        mime.startsWith("text/") || mime.contains("json") || mime.contains("javascript") ||
+                mime.contains("xml") || mime.contains("yaml") || mime.contains("toml") ||
+                mime.contains("markdown") || ext in listOf(
+            "txt", "md", "markdown", "kt", "kts", "java", "py", "js", "ts", "jsx", "tsx",
+            "html", "css", "json", "xml", "yaml", "yml", "toml", "sh", "bash", "c", "cpp",
+            "h", "hpp", "rs", "go", "sql", "gradle", "properties", "conf", "ini", "log", "env"
+        )
+    }
+
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(role = Role.Button, onClickLabel = L.components.messageBubble.openName(attachment.name)) {
+                if (attachment.reference && attachment.path.isNotBlank()) {
+                    // a file on the agent's machine (sent by path): opened like any file link (encoded, the handler decodes)
+                    fileLinkHandler.onOpenFile(java.net.URLEncoder.encode(attachment.path, "UTF-8"))
+                    return@clickable
+                }
+                val bridgeUrl = attachment.url?.takeIf { HubMediaResolver.isBridgeFileUrl(it) }
+                if (bridgeUrl != null && attachment.localUri.isNullOrBlank()) {
+                    // saved on the bridge (Claude chat): fetch it, then open like a local file
+                    scope.launch {
+                        val file = HubMediaResolver.downloadBridgeFile(context, bridgeUrl, attachment.name)
+                        if (file == null) {
+                            Toast.makeText(context, L.components.messageBubble.nameIsNoLongerAvailable(attachment.name), Toast.LENGTH_SHORT).show()
+                        } else if (isText) {
+                            fileLinkHandler.onOpenFile(file.absolutePath)
+                        } else {
+                            try {
+                                val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, attachment.mimeType ?: "*/*")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(intent, L.components.messageBubble.openName(attachment.name)))
+                            } catch (e: Exception) {
+                                Toast.makeText(context, L.components.messageBubble.cannotOpenMessage(e.message), Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    return@clickable
+                }
+                if (isText) {
+                    val targetPath = when {
+                        attachment.path.isNotBlank() -> attachment.path
+                        !attachment.localUri.isNullOrBlank() -> attachment.localUri
+                        else -> attachment.name
+                    }
+                    fileLinkHandler.onOpenFile(targetPath)
+                } else {
+                    try {
+                        val uri = when {
+                            !attachment.localUri.isNullOrBlank() -> Uri.parse(attachment.localUri)
+                            attachment.path.isNotBlank() && File(attachment.path).exists() -> {
+                                val file = File(attachment.path)
+                                androidx.core.content.FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    file
+                                )
+                            }
+                            else -> null
+                        }
+                        if (uri != null) {
+                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(uri, attachment.mimeType ?: "*/*")
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            context.startActivity(Intent.createChooser(intent, L.components.messageBubble.openName(attachment.name)))
+                        } else {
+                            Toast.makeText(context, attachment.name, Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        Toast.makeText(context, L.components.messageBubble.cannotOpenMessage(e.message), Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Outlined.InsertDriveFile,
+                contentDescription = null,
+                tint = ClaudeTerracotta,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = attachment.name,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (attachment.size > 0L) {
+                    val sizeKb = attachment.size / 1024.0
+                    val sizeStr = if (sizeKb >= 1024) String.format("%.1f MB", sizeKb / 1024.0) else String.format("%.0f KB", sizeKb)
+                    Text(
+                        text = sizeStr,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+            }
+        }
+    }
+}
+

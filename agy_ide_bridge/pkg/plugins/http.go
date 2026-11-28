@@ -20,6 +20,7 @@ import (
 //	POST /restore {folder}    undo the last install (the app calls this when the new version fails to load)
 //	POST /remove {id, delete_data}
 //	POST /set-enabled {id, enabled}
+//	POST /approve {id}         the user approved the plugin's current files (home folders only run approved plugins)
 //	POST /rename {id, folder}
 //	GET  /export?id=          → plugin ZIP
 //	POST /repo/list {repo}    → listing
@@ -118,7 +119,13 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.installs.Store(req.Folder, t)
 		defer m.installs.Delete(req.Folder)
 		pkg := filepath.Join(stage, "pkg")
-		if err := m.downloadFolder(repo, p, pkg, t); err != nil {
+		// everything from one commit (and recorded), or from the branch as before when it can't be resolved
+		commit := m.commitOf(repo)
+		at := repo
+		if commit != "" {
+			at.Ref = commit
+		}
+		if err := m.downloadFolder(at, p, pkg, t); err != nil {
 			fail(w, err)
 			return
 		}
@@ -127,7 +134,7 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(w, fmt.Errorf("%s in %s has no manifest.json", p, repo.slug()))
 			return
 		}
-		m.respondInstall(w, pkg, req.Folder, req.UpdateID, req.AsNew, &Source{repo.slug(), repo.Ref, p})
+		m.respondInstall(w, pkg, req.Folder, req.UpdateID, req.AsNew, &Source{repo.slug(), repo.Ref, p, commit})
 	case "/repo/list":
 		var req struct{ Repo string }
 		if !decode(w, r, &req) {
@@ -188,6 +195,19 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		m.mu.Lock()
 		p, err := m.setEnabled(req.ID, req.Enabled)
+		m.mu.Unlock()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"plugin": p})
+	case "/approve":
+		var req struct{ ID string }
+		if !decode(w, r, &req) {
+			return
+		}
+		m.mu.Lock()
+		p, err := m.approve(req.ID)
 		m.mu.Unlock()
 		if err != nil {
 			fail(w, err)

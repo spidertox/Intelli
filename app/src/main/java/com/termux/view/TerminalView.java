@@ -339,6 +339,8 @@ public final class TerminalView extends View {
             @Override
             public boolean onDoubleTap(MotionEvent event) {
                 // Do not treat is as a single confirmed tap - it may be followed by zoom.
+                // Still tell the client (Intelli: show the keyboard if hidden), unless it ends a text selection.
+                if (mEmulator != null && !isSelectingText()) mClient.onDoubleTap(event);
                 return false;
             }
 
@@ -460,6 +462,11 @@ public final class TerminalView extends View {
             public boolean finishComposingText() {
                 if (TERMINAL_VIEW_KEY_LOGGING_ENABLED) mClient.logInfo(LOG_TAG, "IME: finishComposingText()");
                 super.finishComposingText();
+                // A draft word the keyboard finishes as it is, without sending it again as final text (Ridmik's
+                // phonetic mode, Japanese input, ...): send it, like Termux, instead of dropping it. After commitText
+                // the buffer is already empty, so nothing is sent twice.
+                CharSequence draft = getEditable();
+                if (mEmulator != null && draft.length() > 0) sendKeyboardText(draft);
                 getEditable().clear();
                 return true;
             }
@@ -471,11 +478,33 @@ public final class TerminalView extends View {
                 }
                 if (mEmulator == null) return true;
 
-                if (text != null && text.length() > 0) {
-                    sendTextToTerminal(text);
-                }
+                if (text != null && text.length() > 0) sendKeyboardText(text);
                 getEditable().clear();
                 return true;
+            }
+
+            /**
+             * Text from the keyboard (final text or a finished draft). More than one character at once (the
+             * keyboard's clipboard, a swiped or composed word): one paste, not hundreds of single keystrokes. Single
+             * characters (typing, Enter) keep the key path.
+             */
+            void sendKeyboardText(CharSequence text) {
+                if (Character.codePointCount(text, 0, text.length()) > 1 && mClient.onPasteText(text.toString())) {
+                    stopTextSelectionMode();
+                } else {
+                    sendTextToTerminal(text);
+                }
+            }
+
+            @Override
+            public boolean performContextMenuAction(int id) {
+                // A keyboard's own Paste key (e.g. SwiftKey) asks the editor to paste; the default does nothing here
+                if ((id == android.R.id.paste || id == android.R.id.pasteAsPlainText) && mTermSession != null) {
+                    stopTextSelectionMode();
+                    mTermSession.onPasteTextFromClipboard();
+                    return true;
+                }
+                return super.performContextMenuAction(id);
             }
 
             @Override
@@ -809,10 +838,6 @@ public final class TerminalView extends View {
             /* ctrl+space does not work on some ROMs without this workaround.
                However, this breaks it on devices where it works out of the box. */
             return onKeyDown(keyCode, event);
-        } else if (mClient.shouldEnforceCharBasedInput()) {
-            // Avoid issues with some soft keyboards, such as the LG keyboard on the LG G6:
-            // https://github.com/termux/termux-app/issues/403
-            return true;
         }
         return super.onKeyPreIme(keyCode, event);
     }

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -12,6 +13,7 @@ import (
 	"gemini-server/pkg/buildinfo"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,6 +48,13 @@ type Handler struct {
 	HubManager *hub.HubManager
 	Hub        Broadcaster
 	OnShutdown func()
+
+	// for GET /api/debug/report (the app's Troubleshoot page): the security token (only to mask it and to test the hub
+	// with the app's header, never sent back), this run's log file, the command line and the agents turned off
+	SecToken   string
+	RunLogPath string
+	StartArgs  []string
+	AgentsOff  []string
 
 	lastLoginURL   string
 	lastLoginURLMu sync.RWMutex
@@ -232,8 +241,8 @@ func (h *Handler) ConversationsHandler(w http.ResponseWriter, r *http.Request) {
 							cleanPrompt := transcript.ExtractPromptText(step.Content)
 							if cleanPrompt != "" {
 								firstPrompt = cleanPrompt
-								if len(cleanPrompt) > 36 {
-									title = cleanPrompt[:36] + "..."
+								if runes := []rune(cleanPrompt); len(runes) > 36 {
+									title = string(runes[:36]) + "..."
 								} else {
 									title = cleanPrompt
 								}
@@ -307,8 +316,17 @@ func (h *Handler) ConversationsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// validConvID reports whether id names one conversation folder under BrainDir: not empty, ".", ".." or a path.
+func validConvID(id string) bool {
+	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, `/\`)
+}
+
 func (h *Handler) ConversationMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	convID := strings.TrimPrefix(r.URL.Path, "/api/conversations/")
+	if !validConvID(convID) {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid conversation id", "messages": []models.ChatMessage{}})
+		return
+	}
 
 	transcriptPath := filepath.Join(h.Cfg.BrainDir, convID, ".system_generated", "logs", "transcript.jsonl")
 	if _, err := os.Stat(transcriptPath); os.IsNotExist(err) {
@@ -328,6 +346,10 @@ func (h *Handler) ConversationMessagesHandler(w http.ResponseWriter, r *http.Req
 func (h *Handler) UpdateConversationTitleHandler(w http.ResponseWriter, r *http.Request) {
 	convID := strings.TrimPrefix(r.URL.Path, "/api/conversations/")
 	convID = strings.TrimSuffix(convID, "/title")
+	if !validConvID(convID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid conversation id"})
+		return
+	}
 
 	var req struct {
 		Title string `json:"title"`
@@ -348,6 +370,11 @@ func (h *Handler) UpdateConversationTitleHandler(w http.ResponseWriter, r *http.
 
 func (h *Handler) DeleteConversationHandler(w http.ResponseWriter, r *http.Request) {
 	convID := strings.TrimPrefix(r.URL.Path, "/api/conversations/")
+	// an empty id would be BrainDir itself, and RemoveAll would delete every conversation
+	if !validConvID(convID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid conversation id"})
+		return
+	}
 
 	convDir := filepath.Join(h.Cfg.BrainDir, convID)
 	_ = os.RemoveAll(convDir)
@@ -456,7 +483,7 @@ func (h *Handler) ExportConversationArchiveHandler(w http.ResponseWriter, r *htt
 	convID = strings.TrimSuffix(convID, "/share")
 	convID = strings.TrimSpace(convID)
 
-	if convID == "" {
+	if !validConvID(convID) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "conversationId is required"})
 		return
 	}
@@ -507,8 +534,8 @@ func (h *Handler) ExportConversationArchiveHandler(w http.ResponseWriter, r *htt
 				if err := json.Unmarshal([]byte(line), &step); err == nil && step.Type == "USER_INPUT" && step.Content != "" {
 					cleanPrompt := transcript.ExtractPromptText(step.Content)
 					if cleanPrompt != "" {
-						if len(cleanPrompt) > 36 {
-							title = cleanPrompt[:36] + "..."
+						if runes := []rune(cleanPrompt); len(runes) > 36 {
+							title = string(runes[:36]) + "..."
 						} else {
 							title = cleanPrompt
 						}
@@ -698,73 +725,85 @@ func (h *Handler) RestoreConversationHandler(w http.ResponseWriter, r *http.Requ
 	_ = os.MkdirAll(targetBrainDir, 0755)
 	_ = os.MkdirAll(targetAnnDir, 0755)
 
+	// 1. Which conversation the archive holds (its manifest, else the first conversations/<id>.db or brain/<id>/), before
+	//    anything is written: one archive restores one conversation, never others
 	var detectedConvID string
 	var manifestTitle string
+	for _, file := range zipReader.File {
+		if filepath.ToSlash(filepath.Clean(file.Name)) != "manifest.json" {
+			continue
+		}
+		if rc, err := file.Open(); err == nil {
+			var mf struct {
+				ConversationID string `json:"conversation_id"`
+				Title          string `json:"title"`
+			}
+			_ = json.NewDecoder(io.LimitReader(rc, 1<<20)).Decode(&mf)
+			rc.Close()
+			detectedConvID = mf.ConversationID
+			manifestTitle = mf.Title
+		}
+		break
+	}
+	if detectedConvID == "" {
+		for _, file := range zipReader.File {
+			cleanName := filepath.ToSlash(filepath.Clean(file.Name))
+			if strings.HasPrefix(cleanName, "conversations/") && strings.HasSuffix(cleanName, ".db") {
+				detectedConvID = strings.TrimSuffix(filepath.Base(cleanName), ".db")
+				break
+			}
+			if strings.HasPrefix(cleanName, "brain/") {
+				if parts := strings.Split(cleanName, "/"); len(parts) >= 2 && parts[1] != "" {
+					detectedConvID = parts[1]
+					break
+				}
+			}
+		}
+	}
+	if !validConvID(detectedConvID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No valid conversation found in archive"})
+		return
+	}
 
-	// Unpack files safely
+	// 2. An existing chat is only replaced when the app asked for it (the user confirmed): an archive another app sent
+	//    must not silently overwrite a chat whose id it knows
+	_, dbErr := os.Stat(filepath.Join(targetConvsDir, detectedConvID+".db"))
+	_, brainErr := os.Stat(filepath.Join(targetBrainDir, detectedConvID))
+	if (dbErr == nil || brainErr == nil) && r.URL.Query().Get("replace") != "1" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "conversation_exists", "id": detectedConvID, "title": manifestTitle})
+		return
+	}
+
+	// 3. Unpack that conversation's files only
+	ownsPath := func(rel string) bool {
+		return rel == detectedConvID || strings.HasPrefix(rel, detectedConvID+".") || strings.HasPrefix(rel, detectedConvID+"/")
+	}
 	for _, file := range zipReader.File {
 		cleanName := filepath.Clean(file.Name)
 		if strings.HasPrefix(cleanName, "..") || strings.HasPrefix(cleanName, "/") || strings.HasPrefix(cleanName, "\\") {
 			continue
 		}
-
-		if cleanName == "manifest.json" {
-			rc, err := file.Open()
-			if err == nil {
-				var mf struct {
-					ConversationID string `json:"conversation_id"`
-					Title          string `json:"title"`
-				}
-				_ = json.NewDecoder(rc).Decode(&mf)
-				rc.Close()
-				if mf.ConversationID != "" {
-					detectedConvID = mf.ConversationID
-				}
-				if mf.Title != "" {
-					manifestTitle = mf.Title
-				}
-			}
-			continue
-		}
-
-		if detectedConvID == "" {
-			if strings.HasPrefix(cleanName, "conversations/") && strings.HasSuffix(cleanName, ".db") {
-				base := filepath.Base(cleanName)
-				detectedConvID = strings.TrimSuffix(base, ".db")
-			} else if strings.HasPrefix(cleanName, "brain/") {
-				parts := strings.Split(cleanName, "/")
-				if len(parts) >= 2 && parts[1] != "" {
-					detectedConvID = parts[1]
-				}
-			}
-		}
-
+		cleanName = filepath.ToSlash(cleanName)
 		var destPath string
-		if strings.HasPrefix(cleanName, "conversations/") {
-			rel := strings.TrimPrefix(cleanName, "conversations/")
+		if rel := strings.TrimPrefix(cleanName, "conversations/"); rel != cleanName && ownsPath(rel) {
 			destPath = filepath.Join(targetConvsDir, rel)
-		} else if strings.HasPrefix(cleanName, "brain/") {
-			rel := strings.TrimPrefix(cleanName, "brain/")
+		} else if rel := strings.TrimPrefix(cleanName, "brain/"); rel != cleanName && ownsPath(rel) {
 			destPath = filepath.Join(targetBrainDir, rel)
-		} else if strings.HasPrefix(cleanName, "annotations/") {
-			rel := strings.TrimPrefix(cleanName, "annotations/")
+		} else if rel := strings.TrimPrefix(cleanName, "annotations/"); rel != cleanName && ownsPath(rel) {
 			destPath = filepath.Join(targetAnnDir, rel)
 		} else {
 			continue
 		}
-
 		if file.FileInfo().IsDir() {
 			_ = os.MkdirAll(destPath, 0755)
 			continue
 		}
-
 		_ = os.MkdirAll(filepath.Dir(destPath), 0755)
 		rc, err := file.Open()
 		if err != nil {
 			continue
 		}
-
-		mode := file.Mode()
+		mode := file.Mode().Perm()
 		if mode == 0 {
 			mode = 0644
 		}
@@ -774,11 +813,6 @@ func (h *Handler) RestoreConversationHandler(w http.ResponseWriter, r *http.Requ
 			outFile.Close()
 		}
 		rc.Close()
-	}
-
-	if detectedConvID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No valid conversation found in archive"})
-		return
 	}
 
 	now := time.Now().UTC()
@@ -818,8 +852,8 @@ func (h *Handler) RestoreConversationHandler(w http.ResponseWriter, r *http.Requ
 				if err := json.Unmarshal([]byte(line), &step); err == nil && step.Type == "USER_INPUT" && step.Content != "" {
 					cleanPrompt := transcript.ExtractPromptText(step.Content)
 					if cleanPrompt != "" {
-						if len(cleanPrompt) > 36 {
-							title = cleanPrompt[:36] + "..."
+						if runes := []rune(cleanPrompt); len(runes) > 36 {
+							title = string(runes[:36]) + "..."
 						} else {
 							title = cleanPrompt
 						}
@@ -1267,14 +1301,21 @@ const fileTreeMaxNodes = 20000
 
 // FileTreeHandler recursively lists files and folders (up to 25 levels and fileTreeMaxNodes entries).
 // Symlinked folders are listed but not walked into.
+//
+// ?depth=1 lists only the folder's own entries (see fileTreeLevel): the IDE sidebar reads a folder when it is opened.
 func (h *Handler) FileTreeHandler(w http.ResponseWriter, r *http.Request) {
 	dir := r.URL.Query().Get("dir")
 	if dir == "" {
 		dir = h.Cfg.ProjectsBaseDir
 	}
 
+	if r.URL.Query().Get("depth") == "1" {
+		fileTreeLevel(w, r, dir)
+		return
+	}
+
 	budget := fileTreeMaxNodes
-	tree, err := buildRecursiveFileTree(dir, 0, 25, &budget)
+	tree, err := buildRecursiveFileTree(r.Context(), dir, 0, 25, &budget, true)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1285,8 +1326,52 @@ func (h *Handler) FileTreeHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tree)
 }
 
+// fileTreeLevel answers /api/tree?depth=1: one folder's entries, every one of them but .git (folders have no children
+// in the reply), at most fileTreeMaxNodes (X-Tree-Truncated: 1 when there were more). X-Tree-Depth: 1 tells the app the
+// bridge knows this mode; an older one sends the whole tree.
+// The ETag is the folder's change time, which adding, removing or renaming an entry updates. Asked again with
+// If-None-Match, an unchanged folder answers 304 without being read, so the sidebar can check its open folders often.
+func fileTreeLevel(w http.ResponseWriter, r *http.Request, dir string) {
+	st, err := os.Stat(dir)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !st.IsDir() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a folder"})
+		return
+	}
+	etag := fmt.Sprintf(`"%x"`, st.ModTime().UnixNano())
+	w.Header().Set("X-Tree-Depth", "1")
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	// file systems with a coarse clock (FAT on SD cards) can give two changes close together the same time: a folder
+	// changed in the last seconds is always read again
+	if r.Header.Get("If-None-Match") == etag && time.Since(st.ModTime()) > 3*time.Second {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	budget := fileTreeMaxNodes + 1 // one more than shown, to know the folder has more
+	nodes, err := buildRecursiveFileTree(r.Context(), dir, 0, 0, &budget, false)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if len(nodes) > fileTreeMaxNodes {
+		nodes = nodes[:fileTreeMaxNodes]
+		w.Header().Set("X-Tree-Truncated", "1")
+	}
+	if nodes == nil {
+		nodes = []models.FileNode{}
+	}
+	writeJSON(w, http.StatusOK, nodes)
+}
+
 // buildRecursiveFileTree lists dir; budget is how many more entries the whole tree may hold (shared by all levels).
-func buildRecursiveFileTree(dir string, currentDepth int, maxDepth int, budget *int) ([]models.FileNode, error) {
+// skipHeavy leaves out build and dependency folders (the whole-tree walk); .git is always left out. It stops when ctx
+// ends (the app went away), so an abandoned request does not keep walking.
+func buildRecursiveFileTree(ctx context.Context, dir string, currentDepth int, maxDepth int, budget *int, skipHeavy bool) ([]models.FileNode, error) {
 	if currentDepth > maxDepth || *budget <= 0 {
 		return nil, nil
 	}
@@ -1301,9 +1386,12 @@ func buildRecursiveFileTree(dir string, currentDepth int, maxDepth int, budget *
 		if *budget <= 0 {
 			break
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		name := entry.Name()
 		// Ignore only internal VCS storage and heavy build/dependency caches
-		if name == ".git" || name == "node_modules" || name == "build" || name == "target" || name == "dist" || name == ".gradle" || name == ".idea" {
+		if name == ".git" || (skipHeavy && (name == "node_modules" || name == "build" || name == "target" || name == "dist" || name == ".gradle" || name == ".idea")) {
 			continue
 		}
 
@@ -1329,7 +1417,7 @@ func buildRecursiveFileTree(dir string, currentDepth int, maxDepth int, budget *
 		// Symlinked folders are not walked: on Termux ~/storage/* all point into the same phone storage, and links
 		// can loop back up the tree.
 		if isDir && entry.Type()&os.ModeSymlink == 0 {
-			children, _ := buildRecursiveFileTree(fullPath, currentDepth+1, maxDepth, budget)
+			children, _ := buildRecursiveFileTree(ctx, fullPath, currentDepth+1, maxDepth, budget, skipHeavy)
 			node.Children = children
 		}
 
@@ -1359,26 +1447,96 @@ func expandHome(p string) string {
 	return p
 }
 
+// fileReadUnsizedCap: files that report no size (/proc, /sys) are read up to this; their size is only known by reading.
+const fileReadUnsizedCap = 16 << 20
+
+// FileReadHandler sends a file's bytes with what they are: X-File-Category ("text", "image" or "binary", judged from the
+// first bytes), X-File-Mime and X-File-Size. The file is streamed, never held in memory whole: a few reads of a big file
+// at once (a 300 MB program opened in the IDE) used to fill the phone's memory and freeze it.
+// ?max=N refuses a file bigger than N bytes with 413 and the same details as JSON, so a caller that shows the content
+// never downloads more than it can show. Range requests work (players seek).
 func (h *Handler) FileReadHandler(w http.ResponseWriter, r *http.Request) {
 	path := expandHome(r.URL.Query().Get("path"))
 	if path == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path parameter required"})
 		return
 	}
+	maxBytes := int64(-1)
+	if v := r.URL.Query().Get("max"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			maxBytes = n
+		}
+	}
 
-	content, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if info.IsDir() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "is a folder"})
+		return
+	}
 
-	category, mimeType := detectFileCategoryAndMime(content)
-	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Access-Control-Expose-Headers", "X-File-Category, X-File-Mime, X-File-Size, Content-Type")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	tooLarge := func(size int64, category, mimeType string) {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]interface{}{
+			"error":    fmt.Sprintf("the file is %d bytes, more than the %d asked for", size, maxBytes),
+			"size":     size,
+			"category": category,
+			"mime":     mimeType,
+		})
+	}
+
+	if info.Size() == 0 {
+		limit := int64(fileReadUnsizedCap)
+		if maxBytes >= 0 && maxBytes < limit {
+			limit = maxBytes
+		}
+		data, err := io.ReadAll(io.LimitReader(f, limit+1))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		category, mimeType := detectFileCategoryAndMime(data)
+		w.Header().Set("X-File-Category", category)
+		w.Header().Set("X-File-Mime", mimeType)
+		if int64(len(data)) > limit {
+			if maxBytes >= 0 && int64(len(data)) > maxBytes {
+				tooLarge(int64(len(data)), category, mimeType)
+				return
+			}
+			data = data[:limit]
+		}
+		w.Header().Set("X-File-Size", strconv.Itoa(len(data)))
+		w.Header().Set("Content-Type", mimeType)
+		w.Write(data)
+		return
+	}
+
+	head := make([]byte, 4097) // one past the sample size, so the check knows the file goes on
+	n, _ := io.ReadFull(f, head)
+	category, mimeType := detectFileCategoryAndMime(head[:n])
 	w.Header().Set("X-File-Category", category)
 	w.Header().Set("X-File-Mime", mimeType)
-	w.Header().Set("Access-Control-Expose-Headers", "X-File-Category, X-File-Mime, Content-Type")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Write(content)
+	w.Header().Set("X-File-Size", strconv.FormatInt(info.Size(), 10))
+	if maxBytes >= 0 && info.Size() > maxBytes {
+		tooLarge(info.Size(), category, mimeType)
+		return
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", mimeType)
+	http.ServeContent(w, r, "", info.ModTime(), f)
 }
 
 // trimPartialRune drops a multi-byte character cut in half at the end of a sample taken from a longer file,
@@ -1455,12 +1613,7 @@ func (h *Handler) FileSaveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = os.MkdirAll(filepath.Dir(req.Path), 0755)
-	tmpPath := req.Path + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(req.Content), 0644); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if err := os.Rename(tmpPath, req.Path); err != nil {
+	if err := writeFileKeepMode(req.Path, []byte(req.Content)); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1472,6 +1625,32 @@ func (h *Handler) FileSaveHandler(w http.ResponseWriter, r *http.Request) {
 		"path":    req.Path,
 		"hash":    newHash,
 	})
+}
+
+// writeFileKeepMode replaces a file through a temp file and a rename. A symlink is followed, so its target is written
+// and the link stays; the file keeps its permissions (a new file gets 0644).
+func writeFileKeepMode(path string, data []byte) error {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	mode := os.FileMode(0644)
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, mode); err != nil {
+		return err
+	}
+	// WriteFile's mode is reduced by the umask; set the original one exactly
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 func (h *Handler) FilePatchHandler(w http.ResponseWriter, r *http.Request) {
@@ -1495,8 +1674,14 @@ func (h *Handler) FilePatchHandler(w http.ResponseWriter, r *http.Request) {
 	if startIdx < 0 {
 		startIdx = 0
 	}
+	if startIdx > len(lines) {
+		startIdx = len(lines)
+	}
 	if endIdx > len(lines) {
 		endIdx = len(lines)
+	}
+	if endIdx < startIdx {
+		endIdx = startIdx // an empty range inserts the replacement without duplicating lines
 	}
 
 	var updated []string
@@ -1507,12 +1692,7 @@ func (h *Handler) FilePatchHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newContent := strings.Join(updated, "\n")
-	tmpPath := req.Path + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(newContent), 0644); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if err := os.Rename(tmpPath, req.Path); err != nil {
+	if err := writeFileKeepMode(req.Path, []byte(newContent)); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1633,7 +1813,7 @@ func (h *Handler) FileSearchHandler(w http.ResponseWriter, r *http.Request) {
 		dir = h.Cfg.ProjectsBaseDir
 	}
 
-	cmd := exec.Command("rg", "-n", "--no-heading", query, dir)
+	cmd := exec.Command("rg", "-n", "--no-heading", "-e", query, "--", dir)
 	output, _ := cmd.Output()
 
 	var matches []models.SearchMatch
@@ -1699,6 +1879,12 @@ func (h *Handler) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Printf("[UPLOAD] Saved attachment: %s (%d bytes) at %s\n", uniqueName, len(buffer), targetPath)
 
+	// /attachments/ serves the startup workspace's attachments; a file saved in another project names that project
+	attachmentURL := fmt.Sprintf("%s/attachments/%s", publicBaseURL(r, h.Cfg.Port), uniqueName)
+	if wsDir != h.Cfg.WorkspaceDir {
+		attachmentURL += "?project=" + url.QueryEscape(wsDir)
+	}
+
 	writeJSON(w, http.StatusOK, models.ChatAttachment{
 		ID:        fmt.Sprintf("att_%d", time.Now().UnixMilli()),
 		Name:      req.Filename,
@@ -1706,7 +1892,7 @@ func (h *Handler) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		Path:      targetPath,
 		IsImage:   isImage,
 		Size:      len(buffer),
-		URL:       fmt.Sprintf("%s/attachments/%s", publicBaseURL(r, h.Cfg.Port), uniqueName),
+		URL:       attachmentURL,
 	})
 }
 
@@ -1715,8 +1901,15 @@ func (h *Handler) ArtifactsFileServer() http.Handler {
 }
 
 func (h *Handler) AttachmentsFileServer() http.Handler {
-	targetDir := filepath.Join(h.Cfg.WorkspaceDir, ".gemini", "attachments")
-	return http.StripPrefix("/attachments/", http.FileServer(http.Dir(targetDir)))
+	defaultDir := filepath.Join(h.Cfg.WorkspaceDir, ".gemini", "attachments")
+	return http.StripPrefix("/attachments/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// ?project=<dir>: an upload saved in that project's .gemini/attachments (UploadHandler)
+		dir := defaultDir
+		if p := r.URL.Query().Get("project"); p != "" && dirExists(p) {
+			dir = filepath.Join(p, ".gemini", "attachments")
+		}
+		http.FileServer(http.Dir(dir)).ServeHTTP(w, r)
+	}))
 }
 
 func dirExists(path string) bool {
@@ -1776,12 +1969,16 @@ func (h *Handler) McpConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		saveContent := injectTermuxEnvIfNeeded(req.Content)
 
-		// Write to both primary (~/.gemini/config/mcp_config.json) and legacy (~/.gemini/antigravity/mcp_config.json)
+		// Write to both primary (~/.gemini/config/mcp_config.json) and legacy (~/.gemini/antigravity/mcp_config.json).
+		// 0600: the entries carry secret headers (X-Device-Id = the phone tools key). WriteFile keeps the mode of a
+		// file that already exists, so chmod after.
 		_ = os.MkdirAll(filepath.Dir(primaryConfigPath), 0755)
-		errPrimary := os.WriteFile(primaryConfigPath, []byte(saveContent), 0644)
+		errPrimary := os.WriteFile(primaryConfigPath, []byte(saveContent), 0600)
+		_ = os.Chmod(primaryConfigPath, 0600)
 
 		_ = os.MkdirAll(filepath.Dir(legacyConfigPath), 0755)
-		errLegacy := os.WriteFile(legacyConfigPath, []byte(saveContent), 0644)
+		errLegacy := os.WriteFile(legacyConfigPath, []byte(saveContent), 0600)
+		_ = os.Chmod(legacyConfigPath, 0600)
 
 		if errPrimary != nil && errLegacy != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": errPrimary.Error()})

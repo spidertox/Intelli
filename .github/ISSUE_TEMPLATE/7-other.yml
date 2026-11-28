@@ -7,7 +7,7 @@ body:
       value: |
         ⚠️ **Use this only if you have no other choice.**
         Bug, crash, install problem, agent / model problem, improvement or new feature? Go back and pick that template instead: issues here that fit one of them will be **closed**.
-        Questions ("how do I…?") go to the [WhatsApp community](https://chat.whatsapp.com/IGQX8q9zSVV0RarG70sclV).
+        Questions ("how do I…?") should start with the [User guide](https://github.com/spidertox/Intelli/blob/main/user_docs/README.md).
 
   - type: checkboxes
     id: checks

@@ -5,8 +5,6 @@ on:
     branches:
       - main
       - master
-    tags:
-      - 'v*'
     paths:
       - 'version.json'
   workflow_dispatch:
@@ -25,6 +23,12 @@ jobs:
           # full history: the app's "What's new" page is generated from every commit of version.json
           fetch-depth: 0
 
+      # termux-am (termux/TermuxAm): am.apk is built from it for ai.intelli. Only this submodule: the build does not
+      # need the others (termux-api, termux-x11, intelli-vscode, intelli-chrome-extension, Intelli-mini-apps,
+      # Intelli-plugins).
+      - name: Fetch the termux-am submodule
+        run: git submodule update --init --depth 1 termux-am
+
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
@@ -34,50 +38,81 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: 'agy_ide_bridge/go.mod'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # The release is the newer of version.json's stable release and its beta (scripts/release_version.py, the same
+      # rule as the Gradle build, which also checks the file). A beta is published as a pre-release that is not
+      # "Latest", so the repo's latest release (and the links to it) stay on the stable version.
       - name: Parse version.json
         id: version
         run: |
-          VERSION_NAME=$(python3 -c "import json; print(json.load(open('version.json')).get('version_name', '1.0.0'))")
-          VERSION_CODE=$(python3 -c "import json; print(json.load(open('version.json')).get('version_code', 1))")
-          CHANGELOG=$(python3 -c "import json; cl = json.load(open('version.json')).get('changelog', ''); print('\n'.join(cl) if isinstance(cl, list) else cl)")
+          VERSION_NAME=$(python3 scripts/release_version.py name)
+          CHANNEL=$(python3 scripts/release_version.py channel)
+          CHANGELOG=$(python3 scripts/release_version.py changelog)
+          if [ "$CHANNEL" = "beta" ]; then
+            CHANGELOG="Beta for testing: it installs over the stable app and keeps your data. Going back to the stable version means waiting for the next stable release (or uninstalling).
+
+          ${CHANGELOG}"
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "make_latest=false" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+            echo "make_latest=true" >> $GITHUB_OUTPUT
+          fi
           echo "tag=v${VERSION_NAME}" >> $GITHUB_OUTPUT
           echo "name=v${VERSION_NAME}" >> $GITHUB_OUTPUT
           echo "changelog<<EOF" >> $GITHUB_OUTPUT
           echo "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Restore or Generate Keystore
+      - name: Restore Keystore from Secret
         run: |
-          if [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
-            echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > app/release.jks
-            echo "Keystore restored from secret."
-          else
-            echo "No keystore secret found. Generating an ephemeral keystore for this build."
-            keytool -genkeypair -v \
-              -keystore app/release.jks \
-              -alias antigem \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass 123456 -keypass 123456 \
-              -dname "CN=Intelli, OU=Dev, O=spidertox, L=Unknown, ST=Unknown, C=US"
-            echo "Ephemeral keystore generated. For production updates, set RELEASE_KEYSTORE_BASE64 secret."
+          if [ -z "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
+            echo "Error: RELEASE_KEYSTORE_BASE64 secret is missing in GitHub repository settings."
+            exit 1
           fi
+          echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > app/release.jks
 
       - name: Build Release APKs
         run: |
           chmod +x gradlew scripts/build_all_apks.sh
           ./scripts/build_all_apks.sh --release
 
+      # R8 mapping of the arm64 APK, to decode its crash stack traces (retrace). The x86_64 build below
+      # writes the same path, so copy it now.
+      - name: Save arm64 R8 mapping
+        run: zip -j "output/Intelli-${{ steps.version.outputs.tag }}-mapping.zip" app/build/outputs/mapping/release/mapping.txt
+
+      # Intelli-v<version>-chroot.apk: the arm64 app with the Ubuntu chroot's Linux bridge (rooted phones). The normal
+      # APK above leaves that bridge out and installs this one over itself from its chroot page; the chroot app's
+      # updater downloads this file.
+      - name: Build chroot Release APK
+        run: ./scripts/build_all_apks.sh --release --chroot
+
+      - name: Save chroot R8 mapping
+        run: zip -j "output/Intelli-${{ steps.version.outputs.tag }}-chroot-mapping.zip" app/build/outputs/mapping/release/mapping.txt
+
+      # Intelli-v<version>-x86_64.apk, for x86_64 devices (emulators, Intel/AMD Chromebooks), with the chroot's Linux
+      # bridge too; the x86_64 app's updater downloads this one. Its bridge links through the Android NDK's clang,
+      # which the runner has (ANDROID_NDK_HOME).
+      - name: Build x86_64 Release APK
+        run: ./scripts/build_all_apks.sh --release --x86_64
+
+      - name: Save x86_64 R8 mapping
+        run: zip -j "output/Intelli-${{ steps.version.outputs.tag }}-x86_64-mapping.zip" app/build/outputs/mapping/release/mapping.txt
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.version.outputs.name }}
           body: ${{ steps.version.outputs.changelog }}
+          prerelease: ${{ steps.version.outputs.prerelease }}
+          make_latest: ${{ steps.version.outputs.make_latest }}
           generate_release_notes: true
           files: output/*
         env:

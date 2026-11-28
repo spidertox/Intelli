@@ -1,0 +1,292 @@
+package ai.intelli.ui.agents
+
+import ai.intelli.ui.components.bouncyVerticalScroll
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import ai.intelli.domain.model.AgentKind
+import ai.intelli.ui.components.accent
+import ai.intelli.ui.components.label
+import ai.intelli.ui.components.mergedIntoRow
+import ai.intelli.ui.components.toggleRowSemantics
+import ai.intelli.i18n.L
+
+private data class AgentOption(val agent: AgentKind, val title: String, val description: String)
+
+private val AGENT_OPTIONS get() = listOf(
+    AgentOption(
+        AgentKind.AGY,
+        L.common.antigravity,
+        L.agents.setupUi.googlesCodingAgentThroughTheAgy
+    ),
+    AgentOption(
+        AgentKind.CLAUDE,
+        L.common.claudeCode,
+        L.agents.setupUi.anthropicsClaudeCodeCliOnThis
+    ),
+    AgentOption(
+        AgentKind.OPENCODE,
+        "OpenCode",
+        L.agents.setupUi.openSourceCodingAgent200Providers
+    ),
+    AgentOption(
+        AgentKind.CODEX,
+        L.common.codex,
+        L.agents.setupUi.openaisCodexCliOnThisDevice
+    )
+)
+
+/**
+ * The agents to run: tap to turn each on or off (at least one stays on). With several on, the new-chat screen
+ * lets you pick the agent per chat; they share the chat list, status and accounts.
+ */
+@Composable
+fun AgentSelector(selected: Set<AgentKind>, onSelect: (Set<AgentKind>) -> Unit, modifier: Modifier = Modifier, allowEmpty: Boolean = false) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        AGENT_OPTIONS.forEach { option ->
+            val isOn = option.agent in selected
+            val accent = option.agent.accent()
+            Surface(
+                onClick = {
+                    val next = if (isOn) selected - option.agent else selected + option.agent
+                    if (allowEmpty || next.isNotEmpty()) onSelect(next)
+                },
+                shape = RoundedCornerShape(16.dp),
+                color = if (isOn) accent.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surface,
+                border = BorderStroke(if (isOn) 1.5.dp else 1.dp, if (isOn) accent.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                modifier = Modifier.fillMaxWidth().semantics {
+                    this.role = Role.Checkbox
+                    toggleableState = ToggleableState(isOn)
+                }
+            ) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    AgentMark(option.agent, size = 40.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(option.title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text(option.description, fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Box(
+                        Modifier
+                            .size(20.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .border(1.5.dp, if (isOn) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                            .background(if (isOn) accent else Color.Transparent)
+                            .clearAndSetSemantics { },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isOn) Text("✓", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+        if (selected.size > 1) {
+            Text(
+                L.agents.setupUi.withSeveralAgentsOnPickThe,
+                fontSize = 11.5.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+        }
+    }
+}
+
+/**
+ * First launch: which agents the app should run. Nothing is preselected: the user ticks one or more (the same
+ * choice as Settings → Agents). Full screen, as step [step] of [total] of the setup.
+ */
+@Composable
+fun AgentChoiceDialog(step: Int = 1, total: Int = 1, onConfirm: (Set<AgentKind>) -> Unit) {
+    var selected by remember { mutableStateOf(emptySet<AgentKind>()) }
+    ai.intelli.ui.onboarding.OnboardingStepScreen(
+        step = step,
+        total = total,
+        accent = MaterialTheme.colorScheme.primary,
+        icon = {
+            // one mark per agent, two by two (fits the round icon)
+            Box(Modifier.size(52.dp)) {
+                val corners = listOf(Alignment.TopStart, Alignment.TopEnd, Alignment.BottomStart, Alignment.BottomEnd)
+                AgentKind.entries.take(corners.size).forEachIndexed { i, agent ->
+                    AgentMark(agent, size = 28.dp, modifier = Modifier.align(corners[i]))
+                }
+            }
+        },
+        title = L.agents.setupUi.chooseYourAgents,
+        subtitle = L.agents.setupUi.tickTheCodingAgentsYouWant,
+        primaryLabel = when (selected.size) {
+            0 -> L.agents.setupUi.pickAtLeastOneAgent
+            1 -> L.agents.setupUi.continueWithValue(selected.first().label())
+            else -> L.agents.setupUi.continueWithSelectedcountAgents(selected.size)
+        },
+        primaryEnabled = selected.isNotEmpty(),
+        onPrimary = { onConfirm(selected) }
+    ) {
+        AgentSelector(selected, { selected = it }, allowEmpty = true)
+    }
+}
+
+/** Settings → Agents: change the selection; applying stops the local server and restarts the app with the new agents. */
+@Composable
+fun AgentsSettingsPage(
+    enabled: Set<AgentKind>,
+    isApplying: Boolean,
+    onApply: (Set<AgentKind>) -> Unit,
+    modifier: Modifier = Modifier,
+    onOpenGlobalContext: (() -> Unit)? = null,
+    onOpenAgentMemory: (() -> Unit)? = null,
+    onOpenEgm: (() -> Unit)? = null
+) {
+    var selected by remember(enabled) { mutableStateOf(enabled) }
+    var confirm by remember { mutableStateOf(false) }
+    Column(modifier.fillMaxSize().bouncyVerticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text(
+            L.agents.setupUi.agentsYouTurnOffDoNot,
+            fontSize = 12.5.sp,
+            lineHeight = 17.sp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
+        )
+        Spacer(Modifier.height(14.dp))
+        AgentSelector(selected, { selected = it })
+        Spacer(Modifier.height(18.dp))
+        Button(
+            onClick = { confirm = true },
+            enabled = selected != enabled && !isApplying,
+            shape = RoundedCornerShape(14.dp),
+            contentPadding = PaddingValues(vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (isApplying) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                Spacer(Modifier.width(10.dp))
+                Text(L.common.restarting)
+            } else {
+                Text(if (selected == enabled) L.agents.setupUi.noChanges else L.agents.setupUi.applyAndRestartApp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        if (onOpenGlobalContext != null) {
+            Spacer(Modifier.height(24.dp))
+            ai.intelli.ui.settings.GlobalContextEntryRow(onClick = onOpenGlobalContext)
+        }
+        if (onOpenAgentMemory != null) {
+            Spacer(Modifier.height(12.dp))
+            ai.intelli.ui.settings.AgentMemoryEntryRow(onClick = onOpenAgentMemory)
+        }
+        if (onOpenEgm != null) {
+            Spacer(Modifier.height(12.dp))
+            ai.intelli.ui.settings.EgmEntryRow(onClick = onOpenEgm)
+        }
+        Spacer(Modifier.height(12.dp))
+        val vibrateOnDone by ai.intelli.data.agent.ChatCompletionMonitor.vibrate.collectAsState()
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                Modifier
+                    .toggleRowSemantics(vibrateOnDone, { ai.intelli.data.agent.ChatCompletionMonitor.setVibrate(it) })
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(L.agents.setupUi.vibrateWhenAChatFinishes, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        L.agents.setupUi.oneLightBuzzWhenAChat,
+                        fontSize = 12.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(checked = vibrateOnDone, onCheckedChange = { ai.intelli.data.agent.ChatCompletionMonitor.setVibrate(it) }, modifier = Modifier.mergedIntoRow())
+            }
+        }
+    }
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text(L.agents.setupUi.restartToApply, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() }) },
+            text = {
+                Text(
+                    L.agents.setupUi.theLocalServerStopsAndThe,
+                    fontSize = 13.5.sp
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    confirm = false
+                    onApply(selected)
+                }) { Text(L.agents.setupUi.restartApp) }
+            },
+            dismissButton = { TextButton(onClick = { confirm = false }) { Text(L.common.cancel) } }
+        )
+    }
+}
+
+/** Shown while the server stops before the app restarts for a new agent selection. */
+@Composable
+fun AgentsApplyingDialog() {
+    Dialog(onDismissRequest = {}, properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)) {
+        Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Row(Modifier.padding(horizontal = 22.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(22.dp).clearAndSetSemantics { }, strokeWidth = 2.5.dp)
+                Spacer(Modifier.width(14.dp))
+                Column {
+                    Text(L.agents.setupUi.applyingAgents, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                    Text(L.agents.setupUi.stoppingTheLocalServerThenRestarting, fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+            }
+        }
+    }
+}

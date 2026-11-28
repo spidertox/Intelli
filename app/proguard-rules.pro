@@ -89,3 +89,18 @@
 }
 # WorkManager's Room database is created by reflection; R8 full mode strips its no-arg constructor.
 -keep class * extends androidx.room.RoomDatabase { <init>(); }
+
+# Shizuku starts this class by name (from this APK) in a process of its own
+-keep class ai.intelli.data.adb.DeviceShellService { <init>(...); }
+
+# Keep CREATOR on every Parcelable, so view states saved by library or system views
+# (e.g. androidx ViewPager$SavedState) can be read back when the activity is recreated
+-keepclassmembers class * implements android.os.Parcelable {
+    public static final ** CREATOR;
+}
+
+# Home-screen widgets: Glance tells widget types apart by their GlanceAppWidget class name, and starts a widget
+# button's ActionCallback by its class name. v2.0.5-beta.10 merged ChatsWidget, ActionsWidget and ScriptsWidget into
+# one class, so redrawing "the Chats widgets" drew every Intelli widget as Chats. Keep each one whole and named.
+-keep class * extends androidx.glance.appwidget.GlanceAppWidget { <init>(); }
+-keep class * implements androidx.glance.appwidget.action.ActionCallback { <init>(); }

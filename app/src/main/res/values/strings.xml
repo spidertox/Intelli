@@ -1,9 +1,9 @@
 <resources>
-    <string name="app_name">INTELLI</string>
+    <string name="app_name">Intelli</string>
     <string name="anti_term_name">AntiTerm</string>
     <string name="termux_name">Termux</string>
-    <string name="accessibility_service_name">INTELLI Android Automation</string>
-    <string name="accessibility_service_description">Lets the AI agents you connect to INTELLI\'s Android Automation MCP read the screen, take screenshots, tap, swipe, type and open apps on this phone. It only acts when an agent calls one of those tools.</string>
+    <string name="accessibility_service_name">Intelli Android Automation</string>
+    <string name="accessibility_service_description">Lets the AI agents you connect to Intelli\'s Android Automation MCP read the screen, take screenshots, tap, swipe, type and open apps on this phone. It only acts when an agent calls one of those tools.</string>
     <string name="copy_text">Copy</string>
     <string name="paste_text">Paste</string>
     <string name="text_selection_more">More</string>
@@ -13,4 +13,13 @@
     <string name="share_transcript">Share Transcript</string>
     <string name="reset_terminal">Reset Terminal</string>
     <string name="no_urls_found">No URLs found in transcript</string>
+    <!-- Home-screen widgets: names and descriptions in the launcher's widget picker -->
+    <string name="widget_chats_label">Chats</string>
+    <string name="widget_chats_description">Your newest or pinned chats, live: what\'s working and what\'s done</string>
+    <string name="widget_actions_label">Quick actions</string>
+    <string name="widget_actions_description">One-tap buttons: new chats, Terminal, Browser, Code, Files and more</string>
+    <string name="widget_scripts_label">Scripts</string>
+    <string name="widget_scripts_description">Run your ~/.shortcuts scripts, like Termux:Widget</string>
+    <string name="shortcut_script_label">Intelli script</string>
+    <string name="controls_scripts_label">Intelli scripts</string>
 </resources>

@@ -60,6 +60,9 @@ type Manager struct {
 
 	provMu sync.Mutex
 
+	// the models.dev catalog, for what custom endpoints' models can do (capabilities.go)
+	catalog catalogCache
+
 	jobMu sync.Mutex
 	job   *installJob
 }
@@ -110,8 +113,11 @@ func (m *Manager) ResolveBinary() (string, error) {
 			return c, nil
 		}
 	}
-	return "", errors.New("opencode not found (install it with `curl -fsSL https://opencode.ai/v2/install | bash`, or pass --opencode-bin)")
+	return "", fmt.Errorf("%w (install it with `curl -fsSL https://opencode.ai/v2/install | bash`, or pass --opencode-bin)", errNotInstalled)
 }
+
+// errNotInstalled: ResolveBinary found no opencode. A start that failed with it is stale once opencode is there.
+var errNotInstalled = errors.New("opencode not found")
 
 // termuxPrefix is Termux's $PREFIX (…/files/usr), or "" when not on Android.
 func (m *Manager) termuxPrefix() string {
@@ -148,11 +154,18 @@ func glibcInterp(bin string) bool {
 func (m *Manager) command(ctx context.Context, bin string, args ...string) (*exec.Cmd, error) {
 	prefix := m.termuxPrefix()
 	var cmd *exec.Cmd
+	shim := ""
 	if prefix != "" && glibcInterp(bin) {
 		lib := filepath.Join(prefix, "glibc", "lib")
 		loader := filepath.Join(lib, "ld-linux-aarch64.so.1")
 		if runtime.GOARCH == "amd64" {
 			loader = filepath.Join(lib, "ld-linux-x86-64.so.2")
+			// Android's x86_64 seccomp filter blocks syscalls glibc and Bun use there (access, mkdir, rename…): the
+			// app's shim rewrites them (scripts/x86_64-glibc in the app's repo). arm64 has no such syscalls.
+			shim = filepath.Join(lib, "libantigem_sigsys.so")
+			if _, err := os.Stat(shim); err != nil {
+				return nil, fmt.Errorf("opencode needs the app's x86_64 glibc shim, which is missing (%s): reopen the app to restore it", shim)
+			}
 		}
 		if _, err := os.Stat(loader); err != nil {
 			return nil, fmt.Errorf("opencode needs glibc, but the app's glibc runtime is missing (%s): reopen the app to restore it", loader)
@@ -161,10 +174,13 @@ func (m *Manager) command(ctx context.Context, bin string, args ...string) (*exe
 	} else {
 		cmd = exec.CommandContext(ctx, bin, args...)
 	}
-	env := make([]string, 0, len(os.Environ())+4)
+	env := make([]string, 0, len(os.Environ())+5)
+	if shim != "" {
+		env = append(env, "LD_AUDIT="+shim)
+	}
 	hasTmp := false
 	for _, e := range os.Environ() {
-		if prefix != "" && strings.HasPrefix(e, "LD_PRELOAD=") {
+		if prefix != "" && strings.HasPrefix(e, "LD_PRELOAD=") || shim != "" && strings.HasPrefix(e, "LD_AUDIT=") {
 			continue
 		}
 		if strings.HasPrefix(e, "TMPDIR=") && len(e) > len("TMPDIR=") {
@@ -456,7 +472,7 @@ func (m *Manager) Call(ctx context.Context, method, path string, body interface{
 //	GET  /api/opencode/credentials       saved accounts per provider (active or not), without their secrets
 //	GET  /api/opencode/mcp; PUT|DELETE /api/opencode/mcp/{name}   MCP servers kept in the bridge's OpenCode config
 //	GET  /api/opencode/cli/job; POST /api/opencode/cli/{install|update}   install or update OpenCode (~/.opencode/bin)
-//	POST /api/opencode/custom-providers/fetch-models   {"kind","base_url","api_key"|"id"} → model ids of an endpoint
+//	POST /api/opencode/custom-providers/fetch-models   {"kind","base_url","api_key"|"id"} → an endpoint's models and what each can do
 //	*    /api/opencode/x/{path}           relayed to OpenCode's /api/{path} (SSE included: /x/event)
 func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/opencode")
@@ -510,7 +526,8 @@ func (m *Manager) handleStatus(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	running := m.runningLocked() && m.starting == nil
 	starting := m.starting != nil
-	if m.startErr != nil && !running {
+	// "opencode not found" from a start before it was installed is not true any more
+	if m.startErr != nil && !running && !errors.Is(m.startErr, errNotInstalled) {
 		resp["error"] = m.startErr.Error()
 	}
 	if running {

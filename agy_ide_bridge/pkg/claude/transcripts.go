@@ -73,9 +73,15 @@ func (m *Manager) ListSessions() []SessionSummary {
 	live := m.Snapshot()
 	archived := m.ArchivedSessions()
 	out := make([]SessionSummary, 0, len(files))
+	// the same session can have a transcript in two project folders: list it once (the app keys its rows by id),
+	// from the file FindTranscript opens (the first in glob order)
+	listed := make(map[string]bool, len(files))
 	for _, f := range files {
 		name := filepath.Base(f)
 		if !sessionFileRe.MatchString(name) {
+			continue
+		}
+		if listed[strings.TrimSuffix(name, ".jsonl")] {
 			continue
 		}
 		fi, err := os.Stat(f)
@@ -97,6 +103,7 @@ func (m *Manager) ListSessions() []SessionSummary {
 			sum.Live = st.Live
 			sum.Busy = st.Busy
 		}
+		listed[sum.ID] = true
 		out = append(out, sum)
 	}
 	// the subagents of the listed chats, nested under them by the app
@@ -305,6 +312,39 @@ func transcriptCwd(path string) string {
 // maxBytes (0 = whole file). Entries are raw JSON objects in conversation order. With cut, the chain ends at that
 // entry instead of the newest message ("" = no entries): a rewind not followed by a new prompt yet.
 func (m *Manager) History(id string, maxBytes int64, cut *string) ([]json.RawMessage, error) {
+	plan, err := m.planHistory(id, maxBytes, cut)
+	if err != nil {
+		return nil, err
+	}
+	chain := []json.RawMessage{}
+	err = plan.each(func(raw []byte) error {
+		chain = append(chain, append(json.RawMessage{}, raw...))
+		return nil
+	})
+	return chain, err
+}
+
+// historyPlan is where a session's chain entries are in its transcript: the file is scanned once keeping only
+// positions, and each() reads the entries one at a time, so a long chat (tool results, screenshots) is never held
+// in memory as a whole.
+type historyPlan struct {
+	path  string
+	lines []historySpan
+}
+
+type historySpan struct{ off, n int64 }
+
+// historyHead is the part of a transcript line needed to build the chain (the message itself is not decoded).
+type historyHead struct {
+	Type        string  `json:"type"`
+	UUID        string  `json:"uuid"`
+	ParentUUID  *string `json:"parentUuid"`
+	LogicalUUID *string `json:"logicalParentUuid"`
+	IsSidechain bool    `json:"isSidechain"`
+}
+
+// planHistory finds the main-chain entries of a session (see History).
+func (m *Manager) planHistory(id string, maxBytes int64, cut *string) (*historyPlan, error) {
 	path := m.FindTranscript(id)
 	// a subagent's own transcript: all of it is a sidechain
 	sidechain := false
@@ -313,34 +353,34 @@ func (m *Manager) History(id string, maxBytes int64, cut *string) ([]json.RawMes
 		sidechain = path != ""
 	}
 	if path == "" {
-		return []json.RawMessage{}, nil
+		return &historyPlan{}, nil
 	}
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	if maxBytes > 0 && int64(len(data)) > maxBytes {
-		data = data[:maxBytes]
-	}
+	defer f.Close()
 
 	type entry struct {
-		raw        json.RawMessage
+		span       historySpan
+		wanted     bool
 		parent     string
 		toolResult bool
 	}
 	byUUID := map[string]entry{}
 	var order []string
 	leaf := ""
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	sc.Buffer(make([]byte, 64<<10), 256<<20)
-	for sc.Scan() {
-		b := sc.Bytes()
+	var src io.Reader = f
+	if maxBytes > 0 {
+		src = io.LimitReader(f, maxBytes)
+	}
+	err = scanLines(src, func(off int64, b []byte) {
 		if len(b) == 0 || b[0] != '{' {
-			continue
+			return
 		}
-		var l transcriptLine
+		var l historyHead
 		if json.Unmarshal(b, &l) != nil || l.UUID == "" || (l.IsSidechain && !sidechain) {
-			continue
+			return
 		}
 		// every uuid line is part of the parent chain (attachments, progress, …); only messages are returned
 		wanted := l.Type == "user" || l.Type == "assistant" || l.Type == "system"
@@ -350,9 +390,9 @@ func (m *Manager) History(id string, maxBytes int64, cut *string) ([]json.RawMes
 		} else if l.LogicalUUID != nil {
 			parent = *l.LogicalUUID
 		}
-		e := entry{parent: parent}
+		e := entry{parent: parent, wanted: wanted}
 		if wanted {
-			e.raw = append(json.RawMessage{}, b...)
+			e.span = historySpan{off: off, n: int64(len(b))}
 			e.toolResult = l.Type == "user" && bytes.Contains(b, []byte(`"tool_result"`))
 		}
 		if _, dup := byUUID[l.UUID]; !dup {
@@ -362,6 +402,9 @@ func (m *Manager) History(id string, maxBytes int64, cut *string) ([]json.RawMes
 		if l.Type == "user" || l.Type == "assistant" {
 			leaf = l.UUID
 		}
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	if cut != nil {
@@ -390,20 +433,92 @@ func (m *Manager) History(id string, maxBytes int64, cut *string) ([]json.RawMes
 		}
 	}
 
-	chain := []json.RawMessage{}
+	plan := &historyPlan{path: path}
 	for _, id := range chainIDs {
-		if e := byUUID[id]; e.raw != nil {
-			chain = append(chain, e.raw)
+		if e := byUUID[id]; e.wanted {
+			plan.lines = append(plan.lines, e.span)
 		}
 		for _, sib := range siblingResults[id] {
-			chain = append(chain, byUUID[sib].raw)
+			plan.lines = append(plan.lines, byUUID[sib].span)
 		}
 	}
-	return chain, nil
+	return plan, nil
+}
+
+// each calls fn with every chain entry in order. The slice is only valid during the call.
+func (p *historyPlan) each(fn func(raw []byte) error) error {
+	if len(p.lines) == 0 {
+		return nil
+	}
+	f, err := os.Open(p.path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var buf []byte
+	for _, l := range p.lines {
+		if int64(cap(buf)) < l.n {
+			buf = make([]byte, l.n)
+		}
+		b := buf[:l.n]
+		if _, err := f.ReadAt(b, l.off); err != nil {
+			return err
+		}
+		if err := fn(b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// scanLines calls fn with each line of r (without its line break) and the line's offset. Lines may be very long
+// (a tool result with a screenshot): only the longest one is buffered at a time.
+func scanLines(r io.Reader, fn func(off int64, line []byte)) error {
+	br := bufio.NewReaderSize(r, 1<<20)
+	var off int64
+	var long []byte
+	for {
+		chunk, err := br.ReadSlice('\n')
+		if err == bufio.ErrBufferFull {
+			long = append(long, chunk...)
+			continue
+		}
+		line := chunk
+		if len(long) > 0 {
+			long = append(long, chunk...)
+			line = long
+		}
+		n := int64(len(line))
+		if n > 0 {
+			body := line
+			if body[len(body)-1] == '\n' {
+				body = body[:len(body)-1]
+			}
+			if len(body) > 0 && body[len(body)-1] == '\r' {
+				body = body[:len(body)-1]
+			}
+			fn(off, body)
+		}
+		off += n
+		if cap(long) > 4<<20 {
+			long = nil // don't keep a huge line's buffer for the rest of the file
+		} else {
+			long = long[:0]
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // DeleteSession removes a session's transcript and its side folder (subagents, tool results).
 func (m *Manager) DeleteSession(id string) error {
+	if IsSubagentID(id) {
+		return m.deleteSubagent(id)
+	}
 	// a dying CLI flushes its transcript on exit: stop it completely before deleting
 	m.mu.Lock()
 	s := m.sessions[id]
@@ -420,12 +535,16 @@ func (m *Manager) DeleteSession(id string) error {
 	if path == "" {
 		return nil
 	}
+	_ = m.forgetSubagentTitles(subagentIDsOf(path))
 	_ = os.RemoveAll(strings.TrimSuffix(path, ".jsonl"))
 	return os.Remove(path)
 }
 
-// RenameSession appends a custom-title entry, the same way the CLI's /rename does.
+// RenameSession appends a custom-title entry, the same way the CLI's /rename does (a subagent: see renameSubagent).
 func (m *Manager) RenameSession(id, title string) error {
+	if IsSubagentID(id) {
+		return m.renameSubagent(id, title)
+	}
 	path := m.FindTranscript(id)
 	if path == "" {
 		return os.ErrNotExist

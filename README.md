@@ -13,13 +13,31 @@
 [![License](https://img.shields.io/badge/License-GPLv3-blue?style=flat-square)](LICENSE)
 [![Releases](https://img.shields.io/github/v/release/spidertox/Intelli?style=flat-square&label=Download)](https://github.com/spidertox/Intelli/releases)
 
-[Download](https://github.com/spidertox/Intelli/releases) · [Website](https://spidertox.github.io/Intelli/) · [VS Code extension](https://github.com/spidertox/Intelli-vscode-extension) · [Plugin SDK](extension_docs/README.md) · [User Guide](user_docs/README.md) · [WhatsApp community](https://chat.whatsapp.com/IGQX8q9zSVV0RarG70sclV?s=cl&p=a&mlu=4&ilr=4)
+[Download](https://github.com/spidertox/Intelli/releases) · [Website](https://spidertox.github.io/Intelli/) · [Docs & guides](https://spidertox.github.io/Intelli/) · [VS Code extension](https://github.com/spidertox/Intelli-vscode-extension) · [Plugin SDK](extension_docs/README.md) · [User Guide](user_docs/README.md)
+
+<br>
+
+**Get help via GitHub Issues, share what you build, request features and hear about new releases first.**
 
 <br>
 
 <img src="docs/readme/hero.webp" alt="Intelli on a phone: code editor, live browser preview, Claude Code chat, Linux terminal and model picker" width="100%">
 
 </div>
+
+> [!IMPORTANT]
+> ### Intelli has a new home: `ai.intelli`
+> From **v2.0.0**, Intelli is released under its own package name, **`ai.intelli`**. The old app was installed as `com.termux`, the Termux project's package name, which we used only so Termux packages could run at full speed. Shipping Intelli under another project's name wasn't right, and it also stopped Intelli from being installed next to the real Termux app. Intelli now rewrites `com.termux` to `ai.intelli` inside each package as it installs (both names are 10 characters, so it is swapped byte for byte), with no proot and no slowdown.
+>
+> - **The old app keeps working.** Its last version is **v1.2.1** and it gets no more updates. New features and fixes only come to `ai.intelli`.
+> - **You can use both.** The new app installs next to the old one; nothing in the old one is touched. Move over whenever you're ready.
+> - **To move your setup:**
+>   1. In the old app: **Settings → Backups & Restore → Back up environment** (tick *Include SSH keys and sign-ins* to keep your logins; never share that file). It is saved to `Download/Intelli/backups`.
+>   2. Install **`Intelli-v2.x.x.apk`** from [Releases](https://github.com/spidertox/Intelli/releases) (version 2.0.0 or newer; versions below 2.0.0 are the old app).
+>   3. On the new app's setup screen, choose **From a ZIP file** and pick your backup. Every `com.termux` path is rewritten for `ai.intelli` while it restores.
+>   4. When everything works, uninstall the old app, and delete the backup if it contains your sign-ins.
+>
+> The new app is brand new: a few packages, the Linux desktop (X11) and some `termux-*` commands are still being tested. If something breaks, please [open an issue](https://github.com/spidertox/Intelli/issues).
 
 ---
 
@@ -191,7 +209,15 @@ Each one is a one-tap preset in **Settings → MCP Servers**, for every agent.
 - Multiple sessions, themes, font sizes, quick keys and text selection.
 - Background service for long-running builds, servers and scripts.
 - **ADB Connect**: connects the terminal's `adb` to the same phone over Wireless debugging, with pairing from a notification and automatic reconnects.
-- **Linux desktop (X11)**: run an XFCE or LXQt desktop and Linux GUI apps through Termux:X12, set up from **Settings → Termux Support → X11 Desktop** (Shared UID build). See [X11 desktop](#x11-desktop).
+- **Linux desktop (X11)**: run an XFCE or LXQt desktop and Linux GUI apps through Termux:X11, set up from **Settings → Termux Support → X11 Desktop**. See [X11 desktop](#x11-desktop).
+
+### Ubuntu chroot (rooted phones)
+On a rooted phone (Magisk, KernelSU or APatch), the agents and the terminal can run in a **real Ubuntu** instead of the built-in environment: `apt`, `glibc` and `sudo`, at full speed, with no proot.
+- **One setup page:** official Ubuntu 24.04, 26.04 or 22.04 (checksum checked), Intelli's prebuilt image, a URL or a file; where it is installed, its user, phone storage, USB drives, shared folders and packages.
+- **Switch any time** between **Intelli**, **Ubuntu chroot** and **your server** in **Settings → Where agents run**. Both phone environments can be installed side by side.
+- **Its own page:** start and stop, live mounts, disk use, packages, backup and restore, and a safe delete that never touches your files.
+- **Safe by default:** its mounts live in a private namespace, so nothing outside the chroot can reach your files through it. USB drives plugged in later still show up, and fastboot / adb over OTG work.
+- **Root inside the chroot is root of the phone**, so read the risks first. Full guide: **[docs/chroot.md](docs/chroot.md)**.
 
 ### Code editor and Git
 - Syntax highlighting for Python, Go, Kotlin, Java, JS/TS, Rust, C/C++, HTML/CSS, JSON, YAML, Markdown and more.
@@ -218,6 +244,12 @@ Use the agents running on your PC from your phone. [Intelli for VS Code](https:/
 - Notes and to-do lists inside the app and in the floating bubble.
 - Agents can read and update them through the Notes MCP.
 
+### App languages
+- Every text in the app can be translated. The app ships only English: other languages are made by the community and downloaded in **Settings → Language → Get more languages** from the [Intelli Languages](https://github.com/spidertox/Intelli-languages) repository.
+- Downloaded languages show who made them and get an **Update** button when their translation improves. They're read-only: duplicate one to change it, and updates never touch your copy.
+- Make your own language in the app, or let an agent translate the app through the Language MCP while you watch it change. Then send it to the community so everyone can use it.
+- Right-to-left languages, plural rules per language, and a setting for the language agents reply in.
+
 ### Backups and updates
 - Back up and restore the Linux rootfs, projects and chat history to phone storage.
 - Data loss protection: an optional uninstall shield and a guard against **Clear data** in App info.
@@ -228,25 +260,23 @@ Use the agents running on your PC from your phone. [Intelli for VS Code](https:/
 
 ## Download
 
-Get the latest APK from [Releases](https://github.com/spidertox/Intelli/releases). There are two build variants, and one extra **mode** that works with either of them:
+Get the latest APK from [Releases](https://github.com/spidertox/Intelli/releases). There is one app, with the package name `ai.intelli`. It sets up its own Linux environment from the Termux packages, so it doesn't need the Termux app, and it can be installed next to it.
 
-| Variant | Package name | Needs the Termux app? | Notes |
-| :--- | :--- | :---: | :--- |
-| **`termux`** (recommended) | `com.termux` | No | Self-contained: the app sets up its own Linux environment. This is the one published in releases. |
-| **`standard`** | `com.intelli` | Yes | You run `agy_ide_bridge` inside a separately installed Termux app, and Intelli connects to it over localhost. Not published; build it yourself from source. |
-| **Server mode** (a mode, not a third build) | the same as the build you installed (`com.termux` or `com.intelli`) | No | The bridge, the agents (`agy`, Claude Code, OpenCode, Codex), your projects and the terminal run on **your own server (a VPS)**, and the phone is only the screen. Switch it on in **Settings → Servers**. Works with both variants. See [Server mode](#server-mode-run-it-on-a-vps) below. |
+**Server mode** (a mode, not another build): the bridge, the agents (`agy`, Claude Code, OpenCode, Codex), your projects and the terminal run on **your own server (a VPS)**, and the phone is only the screen. Switch it on in **Settings → Where agents run**. See [Server mode](#server-mode-run-it-on-a-vps) below.
 
 > [!NOTE]
-> The `standard` variant is not deprecated, but it gets little attention because almost nobody uses it. Some features, such as the Browser MCP, may not work in it right now, and it may be dropped in the future. Use the `termux` variant.
+> **Coming from the old `com.termux` build of Intelli?** Android treats `ai.intelli` as a different app, so your files don't move over by themselves:
+> 1. In the old app, open **Settings → Backups & Restore → Back up environment**. Tick *Include SSH keys and sign-ins* to keep your logins (never share that file with anyone). The backup is saved to `Download/Intelli/backups/bootrapz_<time>.zip`.
+> 2. Install `ai.intelli`. On its setup screen, choose **From a ZIP file** and pick that backup.
+> 3. Once everything works, uninstall the old app, and delete the backup if it has your sign-ins.
 
-> [!IMPORTANT]
-> The `termux` variant uses the package name `com.termux`, so it cannot be installed on the same phone as the official Termux app. Uninstall Termux first, or use the `standard` variant.
+### How it runs Termux packages without being `com.termux`
 
-### Why the package name is `com.termux`
+Termux packages are compiled for the fixed path `/data/data/com.termux/files/usr`. Instead of faking that path with **proot** (which slows down every program) or rebuilding every package, Intelli rewrites `com.termux` to `ai.intelli` in each package when it is installed: in file paths, file contents, symlinks and install scripts. Both names are 10 characters long, so the rewrite changes bytes in place and binaries keep their layout.
 
-Termux packages are compiled for the fixed path `/data/data/com.termux/files/usr`. An app with any other package name cannot run them directly. It would have to use **proot** to fake that path, and proot slows down every program, or rebuild every package for a new path.
+It happens by itself for the bootstrap, for restored backups, for `pkg install` / `apt install` (an apt hook) and for `dpkg -i` (a dpkg wrapper). One Termux file can't be rewritten that way: `am.apk`, the Java code of the `am` command, which Termux builds to send intents as `com.termux`. Intelli builds it from Termux's own source (the `termux-am` submodule) for `ai.intelli` and puts it in place of Termux's. Everything runs at full native speed from the official Termux repositories. In your home folder only paths are rewritten, so your own files that mention `com.termux` stay as they are.
 
-With the package name `com.termux`, Intelli can use the [Intelli Termux bootstrap](https://github.com/spidertox/Termux-botstrap) alongside the official Termux bootstrap and package repositories, so everything runs at full native speed. This is the only reason for the name.
+For a full Ubuntu, install it in the terminal: `pkg install proot-distro && proot-distro install ubuntu`.
 
 ### This is not a Termux fork
 
@@ -256,7 +286,7 @@ Intelli is not a copy or modification of the Termux app. The app was written fro
 
 Packages, `apt`/`pkg`, the shell and almost everything else work as in Termux.
 
-Intelli has essential Termux:API commands built in with zero setup:
+Intelli has the common Termux:API commands built in. It installs Termux's `termux-api` package (the `termux-*` commands) during setup, so they work right away:
 
 | Command | Built in |
 | :--- | :---: |
@@ -276,23 +306,19 @@ For advanced hardware APIs (such as `termux-location`, `termux-camera-photo`, `t
 👉 **[Download Intelli Termux:API Companion App](https://github.com/spidertox/Termux-api/releases)**
 
 > [!IMPORTANT]
-> **Intelli Variant Requirement for Termux:API:**
-> - To use the external Termux:API companion app, you **must install the Shared UID variant** (`intelli-termux-shared-v...apk`). Both apps share the `com.termux` Linux UID to communicate via UNIX sockets.
-> - **Existing Users:** Android does not allow changing `sharedUserId` via an update (`INSTALL_FAILED_SHARED_USER_INCOMPATIBLE`). If you currently have the Standalone build installed, you must **backup your files, uninstall the app, and install the Shared UID build**.
-> - You can check your current variant in Intelli under **Settings → About & Info** (shows *Shared UID Build* or *Standalone Build*).
+> The companion app must be Intelli's build for `ai.intelli`: it shares Intelli's Linux user (`sharedUserId ai.intelli`) to talk to it over UNIX sockets. Companion apps made for the old `com.termux` build, or the official Termux:API, don't work with it.
+>
+> **Moving from the old `com.termux` app?** Download the Termux:API companion again from the [releases page](https://github.com/spidertox/Termux-api/releases) and install it for `ai.intelli`. Don't keep using the companion you installed for the old app: it only works with the old app.
 
-**How to enable:**
-1. Install the companion APK from the [releases page](https://github.com/spidertox/Termux-api/releases).
-2. In Intelli, go to **Settings → Termux Support → Termux:API** and select **External Termux:API App**.
-3. Tap **Reinstall Package Now** (or run `pkg reinstall termux-api` in the terminal) to restore the official dispatcher binary.
+**How to enable:** install the companion APK from the [releases page](https://github.com/spidertox/Termux-api/releases), then choose **Intelli's Termux:API app** in **Settings → Termux Support → Termux:API**. One handler is used at a time: *Built-in* (the default) or the app, which then handles every `termux-*` command. Intelli's dispatcher and the package's own binary sit side by side (`dpkg-divert`), so switching needs no reinstall, and installing or updating `termux-api` never breaks either of them.
 
 #### X11 desktop
 
-Intelli can run a Linux desktop (XFCE or LXQt) with [Termux:X12](https://github.com/spidertox/Termux-x12). It uses Intelli's own build of Termux:X12 (`com.intelli.x12`), signed to share the `com.termux` UID, so the desktop runs inside Intelli's process and Android doesn't slow it down or stop it while you use it. This needs the **Shared UID build**.
+Intelli can run a Linux desktop (XFCE or LXQt) with [Termux:X11](https://github.com/termux/termux-x11). It uses Intelli's own build of Termux:X11, signed to share Intelli's Linux user, so the desktop runs inside Intelli's process and Android doesn't slow it down or stop it while you use it.
 
-Go to **Settings → Termux Support → X11 Desktop** and follow the steps: install the Termux:X12 app, the `termux-x11` command and a desktop, then tap **Start**.
+Go to **Settings → Termux Support → X11 Desktop** and follow the steps: install the Termux:X11 app, the `termux-x11` command and a desktop, then tap **Start**.
 
-To set it up by hand instead, get `intelli-termux-x12-sharedUid.apk` and `intelli-termux-x12-*-all.deb` from the [Intelli Termux:X12 releases](https://github.com/spidertox/Termux-x12/releases/latest), install the APK, and run:
+To set it up by hand instead, get `intelli-termux-x12-sharedUid.apk` and `intelli-termux-x12-*-all.deb` from the [Intelli Termux:X11 releases](https://github.com/spidertox/Termux-x12/releases/latest), install the APK, and run:
 
 ```bash
 pkg install x11-repo
@@ -301,7 +327,10 @@ pkg install dbus xfce4
 termux-x11 :0 -xstartup "dbus-launch --exit-with-session xfce4-session"
 ```
 
-Then open Termux:X12. Don't install `termux-x11-nightly` from x11-repo: it only works with the official Termux:X11 app.
+Then open Termux:X11. Don't install `termux-x11-nightly` from x11-repo: it only works with the official Termux:X11 app.
+
+> [!IMPORTANT]
+> **Moving from the old `com.termux` app?** Download Intelli's Termux:X11 app and `.deb` again from the [Intelli Termux:X11 releases](https://github.com/spidertox/Termux-x12/releases/latest) and install them for `ai.intelli`. Don't keep using the Termux:X11 app you installed for the old app: it only works with the old app.
 
 ---
 
@@ -334,7 +363,7 @@ Then open Termux:X12. Don't install `termux-x11-nightly` from x11-repo: it only 
 
 By default everything runs on the phone. In **Server mode** the heavy part moves to a Linux server that you own (a VPS, a home server, a spare PC): the **IDE bridge**, the **Antigravity hub (`agy`)**, **Claude Code**, your **projects, files, git and the shell** all live there, and Intelli on the phone only shows the UI. It is the same app and the same interface, but the chats, the files and the agents' accounts live on the server (they are separate from any chats you have in local mode), so the agents keep working when the phone sleeps, and the phone stays light.
 
-It is **not a separate APK**. Both the `termux` and the `standard` variant can use it: open **Settings → Servers** and pick **SSH tunnel** or **Server** under *Where the server runs*. The Linux environment on the phone is not needed in this mode. (Default ports differ per variant: `termux` uses 1234 / 1235 for the bridge / hub, `standard` uses 1236 / 1237.)
+It is **not a separate APK**. Both the `termux` and the `standard` variant can use it: open **Settings → Where agents run** and pick **SSH tunnel** or **Server** under *Your server*. The Linux environment on the phone is not needed in this mode. (Default ports differ per variant: `termux` uses 1234 / 1235 for the bridge / hub, `standard` uses 1236 / 1237.)
 
 ### Two ways to connect: start with the SSH tunnel
 
@@ -367,7 +396,7 @@ phone (Intelli app)                              your server
  └─ SSH                          ──────────────►  sshd (start / stop, terminal, reverse tunnels, as above)
 ```
 
-**Port forwards:** in both modes, *Settings → Servers → Port forwards* makes any port of the server reachable on the phone's `127.0.0.1` over SSH. Start `npm run dev` on the server, forward 5173, and open `http://127.0.0.1:5173` in the app's browser.
+**Port forwards:** in both modes, *Settings → Where agents run → Port forwards* makes any port of the server reachable on the phone's `127.0.0.1` over SSH. Start `npm run dev` on the server, forward 5173, and open `http://127.0.0.1:5173` in the app's browser.
 
 ### How to set it up (short version)
 
@@ -375,7 +404,7 @@ phone (Intelli app)                              your server
 2. **Get the bridge on the server:** the app does **not** contain it and never uploads anything. Build it once with Go (`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build` in `agy_ide_bridge/`, or `arm64`), copy it to `~/.intelli/agy_ide_bridge` and `chmod +x` it. Build it from the **same version as your app**: the app compares versions on every launch and tells you when the bridge is out of date.
 3. **Install the agents on the server:** `curl -fsSL https://antigravity.google/cli/install.sh | bash` for Antigravity, `curl -fsSL https://claude.ai/install.sh | bash` for Claude Code (both end up in `~/.local/bin`). You can also install `agy` from the app (**Settings → Agents**) once the bridge is running.
 4. **Choose how the phone reaches it.** *SSH tunnel* (recommended): nothing to do, skip to step 5. *Server* mode: put a reverse proxy with TLS in front (nginx, Caddy or Apache) on two sub-domains, one for the bridge and one for the hub, add the **proxy access header** (a second secret that the proxy checks), and open only SSH, 80 and 443 in the firewall.
-5. **In the app (Settings → Servers):** pick **SSH tunnel** (the addresses are filled in as `http://127.0.0.1:<port>`; keep the default ports unless you changed them) or **Server** (enter your two addresses and, optionally, the proxy access header). Then enter the SSH host, user and key, check the server paths (they are pre-filled with the defaults), **Save**, **Reopen**. The app connects over SSH, opens the tunnels, starts the bridge, and shows its state and log.
+5. **In the app (Settings → Where agents run):** pick **SSH tunnel** (the addresses are filled in as `http://127.0.0.1:<port>`; keep the default ports unless you changed them) or **Server** (enter your two addresses and, optionally, the proxy access header). Then enter the SSH host, user and key, check the server paths (they are pre-filled with the defaults), **Save**, **Reopen**. The app connects over SSH, opens the tunnels, starts the bridge, and shows its state and log.
 6. **Sign in** to Antigravity (a Google redirect page that you paste back into the app) and to Claude Code, and start chatting.
 
 **The full, step-by-step guide, with the two connection modes compared, ready-to-paste nginx, Caddy and Apache configurations, the app settings explained field by field, adb from the server to the phone, updating, and debugging, is here: 👉 [docs/remote-server.md](docs/remote-server.md).**
@@ -415,11 +444,12 @@ APKs are written to `app/build/outputs/apk/<variant>/<buildType>/` and `build/ou
 ```text
 intelli/
 ├── app/src/main/
-│   ├── java/com/example/gemini/
+│   ├── java/ai/intelli/
 │   │   ├── data/          # Agent backends (agy, claude, opencode, codex), terminal, ADB, automation, notes, updater
 │   │   ├── domain/        # Chat models and parsing
 │   │   └── ui/            # Compose screens: chat, IDE, browser, notes, settings
-│   ├── java/com/termux/   # Termux terminal-view widget and com.termux service entry points
+│   ├── java/com/termux/   # Termux terminal-view widget
+│   ├── java/ai/intelli/app/  # entry points the Termux tools call (termux-open, termux-wake-lock, …)
 │   └── assets/browser-runtime/  # Extension host and Chrome API for plugins
 ├── agy_ide_bridge/        # Go bridge: agy hub, Claude Code relay, Git, plugins
 ├── extensions/            # Bundled plugins
@@ -437,13 +467,26 @@ Intelli comes in parts that link to each other:
 | Project | What it is | Repository |
 |---|---|---|
 | **Intelli** (Android app) | The coding agents, a Linux terminal, an editor and a browser on your phone. With **Connect to PC** it also uses the agents of a PC that runs Intelli for VS Code. | [spidertox/Intelli](https://github.com/spidertox/Intelli) |
-| **Intelli for VS Code** | The same agents and chat in a VS Code sidebar. Its **Connect phone** lets the app on your phone use them. | [spidertox/Intelli-vscode-extension](https://github.com/spidertox/Intelli-vscode-extension) |
-| **Intelli Browser Bridge** (Chrome extension) | Lets agents in Intelli for VS Code use your real Chrome. Not needed by the Android app, which has its own browser. | [spidertox/Intelli-browser-extension](https://github.com/spidertox/Intelli-browser-extension) · install: [Chrome Web Store](https://chromewebstore.google.com/detail/intelli-browser-bridge/kbdjcdlfeoijcchepbldpldeaeijgibi) (or *Load unpacked* from Intelli for VS Code) |
+| **Intelli for VS Code** | The same agents and chat in a VS Code sidebar. Its **Connect phone** lets the app on your phone use them. | [spidertox/Intelli-vscode-extension](https://github.com/spidertox/Intelli-vscode-extension) · install: [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=spidertox.intelli-vscode-extension), [Open VSX](https://open-vsx.org/extension/spidertox/Intelli-vscode-extension) |
+| **Intelli Browser Bridge** (Chrome extension) | Lets agents in Intelli for VS Code use your real Chrome. Not needed by the Android app, which has its own browser. | [spidertox/Intelli-browser-extension](https://github.com/spidertox/Intelli-browser-extension) · not in the Chrome Web Store yet: installed with *Load unpacked* from Intelli for VS Code |
+| **Intelli Languages** | The app's translations, made by the people who use it and downloaded from **Settings → Language → Get more languages** (the app ships only English). Also the step-by-step guide to adding or improving a language, the file format and the check every translation passes. | [spidertox/Intelli-languages](https://github.com/spidertox/Intelli-languages) |
 | **Intelli mini apps** | The official mini apps (Habits, Pocket Notes, Sky, Gallery, Focus, Dev Toolbox, Explorer, Showcase), installed from **Mini Apps → Get apps**. Also the guide to building and publishing your own: real app sources using every SDK feature, signed `.agapp` packages, the catalog format and the `agapp.mjs publish` tool. | [spidertox/Intelli-mini-apps](https://github.com/spidertox/Intelli-mini-apps) |
 This is not polished app they are only for showcase only not for use and will be removed in future.
+
+---
+
+## Other similar apps
+
+Intelli not the right fit? These apps do similar things and might suit you better:
+
+- [**Mobile Harness**](https://github.com/techjarves/Mobile-Harness): Claude Code, DeepSeek and Antigravity agents in an Ubuntu (PRoot) workspace, with a terminal, editor and web preview.
+- [**AndroidHarness**](https://github.com/Sanuu7/AndroidHarness): a native app with its own coding agent and chat, free built-in models, offline models and Shizuku shell access.
+
 ## Contributing
 
-Issues, ideas and pull requests are welcome. For help, join the [WhatsApp community](https://chat.whatsapp.com/IGQX8q9zSVV0RarG70sclV?s=cl&p=a&mlu=4&ilr=4).
+Issues, ideas and pull requests are welcome. **Translations** go to [Intelli Languages](https://github.com/spidertox/Intelli-languages): its README shows how to add or update a language, with or without git. For help or bug reports, open a thread in [GitHub Issues](https://github.com/spidertox/Intelli/issues).
+
+**Docs and guides:** the user guide lives on the [website](https://spidertox.github.io/Intelli/): how to install and set up Intelli, every screen and setting, the agents, MCP, plugins, mini apps, how-to guides and troubleshooting. Its source is a separate repository, [spidertox/Intelli_website](https://github.com/spidertox/Intelli_website). The docs are new and need improvement: if you figured something out, found a page that's wrong or unclear, or want to add a guide or screenshots, please contribute there (every docs page has an **Edit this page on GitHub** link).
 
 ## Analytics
 
@@ -459,4 +502,4 @@ Intelli is free software, provided as is, without warranty, as described in the 
 
 ## License
 
-Copyright (C) 2026 spidertox. Licensed under the [GNU General Public License v3.0](LICENSE) or any later version.
+Copyright (C) 2026 spidertox (based on AntiGem by Santosh Kurmi). Licensed under the [GNU General Public License v3.0](LICENSE) or any later version.

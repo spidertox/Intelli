@@ -65,9 +65,12 @@ func ResolveToken(cliToken string) string {
 	cliToken = strings.TrimSpace(cliToken)
 	tokenFile := getTokenFilePath()
 
+	// the folder holds the token: only the owner may list or enter it (also fixes one made 0755 by older versions)
+	_ = os.MkdirAll(filepath.Dir(tokenFile), 0700)
+	_ = os.Chmod(filepath.Dir(tokenFile), 0700)
+
 	if len(cliToken) == TokenLen {
-		_ = os.MkdirAll(filepath.Dir(tokenFile), 0755)
-		_ = os.WriteFile(tokenFile, []byte(cliToken), 0600)
+		writeTokenFile(tokenFile, cliToken)
 		return cliToken
 	}
 
@@ -81,9 +84,22 @@ func ResolveToken(cliToken string) string {
 
 	// Generate and persist new token
 	newToken := GenerateToken()
-	_ = os.MkdirAll(filepath.Dir(tokenFile), 0755)
-	_ = os.WriteFile(tokenFile, []byte(newToken), 0600)
+	writeTokenFile(tokenFile, newToken)
 	return newToken
+}
+
+// writeTokenFile saves the token 0600. os.WriteFile keeps the mode of a file that already exists, so chmod after.
+func writeTokenFile(path, token string) {
+	_ = os.WriteFile(path, []byte(token), 0600)
+	_ = os.Chmod(path, 0600)
+}
+
+// MaskSecret shows only the start of a secret ("abcd…"), for logs other people may read.
+func MaskSecret(s string) string {
+	if len(s) <= 4 {
+		return "…"
+	}
+	return s[:4] + "…"
 }
 
 // PatchAgyHeader rotates the CSRF header in the target binary in-place to the 20-byte framed header.
@@ -113,7 +129,14 @@ func PatchAgyHeader(binaryPath string, token string) (string, time.Duration, err
 	prefixBytes := []byte(Prefix)
 	suffixBytes := []byte(Suffix)
 
-	file, err := os.OpenFile(binaryPath, os.O_RDWR, 0755)
+	// Already patched for this token: nothing to write. Checked read-only first because Linux refuses to open a file
+	// for writing while a process runs it ("text file busy"): an agy hub still exiting after a restart, or agy open in
+	// a terminal, made the hub fail to start although the file needed no change.
+	if alreadyPatched(binaryPath, fileSize, newHeader) {
+		return newHeaderStr, time.Since(t0), nil
+	}
+
+	file, err := openForPatch(binaryPath)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to open binary for writing: %w", err)
 	}
@@ -214,6 +237,56 @@ func PatchAgyHeader(binaryPath string, token string) (string, time.Duration, err
 	}
 
 	return newHeaderStr, time.Since(t0), nil
+}
+
+// alreadyPatched reports whether the file at path (size bytes) holds newHeader and neither agy's standard header nor
+// another token's framed one, reading it only.
+func alreadyPatched(path string, size int, newHeader []byte) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	data, err := syscall.Mmap(int(f.Fd()), 0, size, syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
+		return false
+	}
+	defer syscall.Munmap(data)
+	if bytes.Contains(data, []byte(DefaultHeader)) {
+		return false
+	}
+	prefixBytes, suffixBytes := []byte(Prefix), []byte(Suffix)
+	found := false
+	for pos := 0; ; {
+		idx := bytes.Index(data[pos:], prefixBytes)
+		if idx == -1 {
+			break
+		}
+		at := pos + idx
+		if at+HeaderLen <= len(data) && bytes.Equal(data[at+HeaderLen-len(Suffix):at+HeaderLen], suffixBytes) {
+			if !bytes.Equal(data[at:at+HeaderLen], newHeader) {
+				return false
+			}
+			found = true
+		}
+		pos = at + 1
+	}
+	return found
+}
+
+// patchBusyWait: how long a write to agy waits while it is busy (an agy being stopped can take a few seconds to exit).
+const patchBusyWait = 5 * time.Second
+
+// openForPatch opens the file for writing; while Linux refuses because a process runs it, it tries again for a moment.
+func openForPatch(path string) (*os.File, error) {
+	deadline := time.Now().Add(patchBusyWait)
+	for {
+		f, err := os.OpenFile(path, os.O_RDWR, 0755)
+		if err == nil || !errors.Is(err, syscall.ETXTBSY) || time.Now().After(deadline) {
+			return f, err
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // UnpatchAgyHeader restores any framed 20-byte security header back to the standard DefaultHeader (x-codeium-csrf-token).
@@ -323,9 +396,10 @@ func AuthMiddleware(token string, next http.Handler) http.Handler {
 	rawHeaderName := BuildFramedHeader(token)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow health/ping endpoints without auth
+		// Allow health/ping endpoints without auth: exact paths only, and never a WebSocket upgrade (a WebSocket on an
+		// exempt path would skip the token)
 		path := r.URL.Path
-		if path == "/api/health" || path == "/health" || path == "/ping" {
+		if (path == "/api/health" || path == "/health" || path == "/ping") && r.Header.Get("Upgrade") == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -414,12 +488,17 @@ func (l *failureLimiter) fail(ip string) {
 }
 
 // clientIP is the caller's address; behind a reverse proxy on this machine it is the forwarded one.
+// TrustProxyHeaders: X-Forwarded-For from loopback names the real client (a reverse proxy on a server). Off with
+// --no-proxy-headers (the phone): there every app reaches the bridge on loopback and could change the header on each
+// try to get around the failure limit.
+var TrustProxyHeaders = true
+
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+	if ip := net.ParseIP(host); TrustProxyHeaders && ip != nil && ip.IsLoopback() {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			if i := strings.Index(xff, ","); i >= 0 {
 				xff = xff[:i]

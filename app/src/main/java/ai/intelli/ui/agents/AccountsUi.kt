@@ -1,0 +1,520 @@
+package ai.intelli.ui.agents
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Login
+import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.SwitchAccount
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
+import ai.intelli.data.agent.claude.ClaudeCliStatus
+import ai.intelli.data.remote.AgyHubClient
+import ai.intelli.domain.model.AgentKind
+import ai.intelli.ui.components.accent
+import ai.intelli.ui.components.label
+import ai.intelli.ui.drawer.parseProfileAvatarModel
+import ai.intelli.i18n.L
+
+/**
+ * "Sign out of [agentName]?" with Sign out / Cancel, shown before every agent sign-out (a sign-out button can appear right
+ * where Check or Sign in was a moment ago, so a quick extra tap must not sign the user out). [account]: the email, if known.
+ */
+@Composable
+fun ConfirmSignOutDialog(agentName: String, account: String?, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(L.agents.accountsUi.signOutOfAgent(agentName)) },
+        text = {
+            Column {
+                account?.takeIf { it.isNotBlank() }?.let {
+                    Text(it, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                }
+                Text(L.agents.accountsUi.youWillHaveToSignIn(agentName))
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onDismiss(); onConfirm() }) { Text(L.common.signOut, color = MaterialTheme.colorScheme.error) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(L.common.cancel) } }
+    )
+}
+
+/** Account avatar: the profile picture or initial when signed in, a sign-in glyph otherwise; status badge corner. */
+@Composable
+private fun AccountAvatar(
+    agent: AgentKind,
+    entry: AgentStatusEntry,
+    initial: Char?,
+    pictureUrl: String? = null,
+    size: Dp = 26.dp
+) {
+    val accent = agent.accent()
+    Box(Modifier.size(size)) {
+        val ring = Modifier.size(size).clip(CircleShape).border(1.5.dp, accent.copy(alpha = 0.7f), CircleShape)
+        when {
+            !entry.isReady -> Box(ring.background(accent.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+                if (entry.isSignedOut) {
+                    Icon(Icons.AutoMirrored.Outlined.Login, null, tint = accent, modifier = Modifier.size(size * 0.5f))
+                } else {
+                    AgentMark(agent, size = size)
+                }
+            }
+            pictureUrl != null -> SubcomposeAsyncImage(
+                model = ImageRequest.Builder(LocalContext.current).data(parseProfileAvatarModel(pictureUrl)).crossfade(true).build(),
+                contentDescription = null,
+                modifier = ring,
+                contentScale = ContentScale.Crop,
+                loading = { InitialCircle(initial, accent, size) },
+                error = { InitialCircle(initial, accent, size) }
+            )
+            else -> Box(ring) { InitialCircle(initial, accent, size) }
+        }
+        Box(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .offset(x = 2.dp, y = 2.dp)
+                .size(size * 0.38f)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(1.5.dp)
+                .clip(CircleShape)
+                .background(entry.color)
+        )
+    }
+}
+
+@Composable
+private fun InitialCircle(initial: Char?, accent: Color, size: Dp) {
+    Box(Modifier.fillMaxSize().background(accent), contentAlignment = Alignment.Center) {
+        Text((initial?.uppercaseChar() ?: '•').toString(), fontSize = (size.value * 0.44f).sp, fontWeight = FontWeight.Bold, color = Color.White)
+    }
+}
+
+/**
+ * Drawer footer button for the agent accounts: one avatar per enabled agent (sign-in glyph when signed out) with
+ * its status badge. Opens [AccountsDialog].
+ */
+@Composable
+fun AccountsButton(
+    agy: AgentStatusEntry?,
+    claude: AgentStatusEntry?,
+    agyAuth: AgyHubClient.AgyAuthInfo,
+    claudeStatus: ClaudeCliStatus?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    openCode: AgentStatusEntry? = null,
+    codex: AgentStatusEntry? = null,
+    codexEmail: String? = null
+) {
+    val entries = listOfNotNull(agy, claude, openCode, codex)
+    val needsSignIn = entries.any { it.isSignedOut }
+    val single = entries.singleOrNull()
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)),
+        modifier = modifier
+    ) {
+        Row(Modifier.padding(start = 5.dp, end = 10.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy((-7).dp)) {
+                agy?.let { AccountAvatar(AgentKind.AGY, it, agyAuth.displayName.firstOrNull(), agyAuth.profilePictureUrl?.takeIf { u -> u.isNotBlank() }) }
+                claude?.let { AccountAvatar(AgentKind.CLAUDE, it, claudeStatus?.auth?.email?.firstOrNull()) }
+                openCode?.let { AccountAvatar(AgentKind.OPENCODE, it, null) }
+                codex?.let { AccountAvatar(AgentKind.CODEX, it, codexEmail?.firstOrNull()) }
+            }
+            Spacer(Modifier.width(7.dp))
+            val text = when {
+                needsSignIn -> L.common.signIn
+                single?.agent == AgentKind.AGY && single.isReady -> agyAuth.displayName.ifBlank { L.common.account }
+                single?.agent == AgentKind.CLAUDE && single.isReady -> claudeStatus?.auth?.email?.substringBefore('@') ?: L.common.account
+                single?.agent == AgentKind.OPENCODE && single.isReady -> "OpenCode"
+                single?.agent == AgentKind.CODEX && single.isReady -> codexEmail?.substringBefore('@') ?: L.common.codex
+                single != null -> single.label
+                else -> L.agents.accountsUi.accounts
+            }
+            Text(
+                text,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (needsSignIn) (entries.first { it.isSignedOut }.agent.accent()) else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 104.dp)
+            )
+        }
+    }
+}
+
+/** Both agents' accounts: who is signed in, plan, and sign in / out (usage lives in Settings and the model picker). */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AccountsDialog(
+    agy: AgentStatusEntry?,
+    claude: AgentStatusEntry?,
+    agyAuth: AgyHubClient.AgyAuthInfo,
+    claudeStatus: ClaudeCliStatus?,
+    onAgySignOut: () -> Unit,
+    onAgyCancelSignIn: () -> Unit,
+    onAgySettings: () -> Unit = {},
+    onClaudeSignOut: () -> Unit,
+    onClaudeSettings: () -> Unit,
+    onDismiss: () -> Unit,
+    openCode: AgentStatusEntry? = null,
+    /** Version, connected providers, model count. */
+    openCodeFacts: List<String> = emptyList(),
+    onOpenCodeSettings: () -> Unit = {},
+    codex: AgentStatusEntry? = null,
+    codexEmail: String? = null,
+    /** Plan, version, usage. */
+    codexFacts: List<String> = emptyList(),
+    onCodexSignOut: () -> Unit = {},
+    onCodexSettings: () -> Unit = {}
+) {
+    // the agent whose Sign out was tapped: asks first
+    var confirmSignOut by remember { mutableStateOf<AgentKind?>(null) }
+    // Antigravity saved accounts (save / switch / add / delete) in a popup, without going through Settings
+    var showAgyAccounts by remember { mutableStateOf(false) }
+    // `agy --version`, asked from the bridge (this phone's or the server's) each time the dialog opens
+    val agyCli by ai.intelli.data.remote.BridgeInfo.agyCli.collectAsState()
+    LaunchedEffect(Unit) { ai.intelli.data.remote.BridgeInfo.refreshAgyCli() }
+    val agyVersion = agyCli?.takeIf { it.installed }?.version?.let { v ->
+        Regex("\\d+(\\.\\d+)+\\S*").find(v)?.value ?: v.takeIf { it.isNotBlank() }
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(L.agents.accountsUi.accounts, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(30.dp)) {
+                        Icon(Icons.Outlined.Close, L.common.close, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+
+                agy?.let { entry ->
+                    AccountSection(
+                        entry = entry,
+                        avatar = { AccountAvatar(AgentKind.AGY, entry, agyAuth.displayName.firstOrNull(), agyAuth.profilePictureUrl?.takeIf { it.isNotBlank() }, size = 44.dp) },
+                        title = if (entry.isReady) agyAuth.displayName.ifBlank { AgentKind.AGY.label() } else AgentKind.AGY.label(),
+                        subtitle = agyAuth.email.ifBlank { null }?.takeIf { entry.isReady },
+                        facts = if (entry.isReady) listOfNotNull(
+                            agyAuth.userTier.ifBlank { agyAuth.planName }.ifBlank { null },
+                            agyVersion?.let { "CLI $it" }
+                        ) else listOfNotNull(agyVersion?.let { "CLI $it" })
+                    ) {
+                        when {
+                            entry.isReady -> {
+                                SectionButton(L.common.signOut, Icons.AutoMirrored.Outlined.Logout, danger = true) {
+                                    confirmSignOut = AgentKind.AGY
+                                }
+                            }
+                            entry.pending && entry.action != null -> {
+                                entry.action.let { SectionButton(it.label, primary = AgentKind.AGY.accent()) { it.onClick() } }
+                                SectionButton(L.common.cancel) { onAgyCancelSignIn() }
+                            }
+                            else -> entry.action?.let {
+                                SectionButton(it.label, primary = AgentKind.AGY.accent()) {
+                                    it.onClick()
+                                    onDismiss()
+                                }
+                            }
+                        }
+                        SectionButton(L.common.settings, Icons.Outlined.Settings) {
+                            onAgySettings()
+                            onDismiss()
+                        }
+                        SectionButton(L.agents.agyAccountsUi.switch, Icons.Outlined.SwitchAccount) {
+                            showAgyAccounts = true
+                        }
+                    }
+                }
+
+                if (agy != null && claude != null) Spacer(Modifier.height(12.dp))
+
+                claude?.let { entry ->
+                    val auth = claudeStatus?.auth
+                    AccountSection(
+                        entry = entry,
+                        avatar = { AccountAvatar(AgentKind.CLAUDE, entry, auth?.email?.firstOrNull(), size = 44.dp) },
+                        title = AgentKind.CLAUDE.label(),
+                        subtitle = if (entry.isReady) auth?.email else null,
+                        facts = if (entry.isReady) listOfNotNull(
+                            auth?.subscriptionType?.let { claudePlanLabel(it) },
+                            claudeStatus?.version?.substringBefore(" ")?.let { "CLI $it" }
+                        ) else listOfNotNull(claudeStatus?.version?.substringBefore(" ")?.let { "CLI $it" })
+                    ) {
+                        if (entry.isReady) {
+                            SectionButton(L.common.signOut, Icons.AutoMirrored.Outlined.Logout, danger = true) { confirmSignOut = AgentKind.CLAUDE }
+                        } else {
+                            entry.action?.let {
+                                SectionButton(it.label, primary = AgentKind.CLAUDE.accent()) {
+                                    it.onClick()
+                                    onDismiss()
+                                }
+                            }
+                        }
+                        SectionButton(L.common.settings, Icons.Outlined.Settings) {
+                            onClaudeSettings()
+                            onDismiss()
+                        }
+                    }
+                }
+
+                openCode?.let { entry ->
+                    if (agy != null || claude != null) Spacer(Modifier.height(12.dp))
+                    OpenCodeAccountSection(entry, openCodeFacts, onOpenCodeSettings, onDismiss)
+                }
+
+                codex?.let { entry ->
+                    if (agy != null || claude != null || openCode != null) Spacer(Modifier.height(12.dp))
+                    CodexAccountSection(entry, codexEmail, codexFacts, { confirmSignOut = AgentKind.CODEX }, onCodexSettings, onDismiss)
+                }
+            }
+        }
+    }
+    if (showAgyAccounts && agy != null) {
+        Dialog(onDismissRequest = { showAgyAccounts = false }) {
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.verticalScroll(rememberScrollState()).padding(10.dp)) {
+                    // same card as Settings > Antigravity > Account & CLI: save, switch, add, delete, with its prompts
+                    AgyAccountsCard(agy, agyAuth)
+                    TextButton(onClick = { showAgyAccounts = false }, modifier = Modifier.align(Alignment.End)) { Text(L.common.close) }
+                }
+            }
+        }
+    }
+    confirmSignOut?.let { agent ->
+        ConfirmSignOutDialog(
+            agentName = agent.label(),
+            account = when (agent) {
+                AgentKind.AGY -> agyAuth.email
+                AgentKind.CLAUDE -> claudeStatus?.auth?.email
+                AgentKind.CODEX -> codexEmail
+                else -> null
+            },
+            onConfirm = {
+                when (agent) {
+                    AgentKind.AGY -> { onAgySignOut(); onDismiss() }
+                    AgentKind.CLAUDE -> onClaudeSignOut()
+                    AgentKind.CODEX -> onCodexSignOut()
+                    else -> {}
+                }
+            },
+            onDismiss = { confirmSignOut = null }
+        )
+    }
+}
+
+@Composable
+private fun CodexAccountSection(
+    entry: AgentStatusEntry,
+    email: String?,
+    facts: List<String>,
+    onSignOut: () -> Unit,
+    onSettings: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AccountSection(
+        entry = entry,
+        avatar = { AccountAvatar(AgentKind.CODEX, entry, email?.firstOrNull(), size = 44.dp) },
+        title = AgentKind.CODEX.label(),
+        subtitle = if (entry.isReady) email else null,
+        facts = facts
+    ) {
+        if (entry.isReady) {
+            SectionButton(L.common.signOut, Icons.AutoMirrored.Outlined.Logout, danger = true) { onSignOut() }
+        } else {
+            entry.action?.let {
+                SectionButton(it.label, primary = AgentKind.CODEX.accent()) {
+                    it.onClick()
+                    onDismiss()
+                }
+            }
+        }
+        SectionButton(L.common.settings, Icons.Outlined.Settings) {
+            onSettings()
+            onDismiss()
+        }
+    }
+}
+
+@Composable
+private fun OpenCodeAccountSection(entry: AgentStatusEntry, facts: List<String>, onSettings: () -> Unit, onDismiss: () -> Unit) {
+    AccountSection(
+        entry = entry,
+        avatar = { AccountAvatar(AgentKind.OPENCODE, entry, null, size = 44.dp) },
+        title = AgentKind.OPENCODE.label(),
+        subtitle = null,
+        facts = facts
+    ) {
+        if (!entry.isReady) entry.action?.let {
+            SectionButton(it.label, primary = AgentKind.OPENCODE.accent()) {
+                it.onClick()
+                onDismiss()
+            }
+        }
+        SectionButton(L.common.settings, Icons.Outlined.Settings) {
+            onSettings()
+            onDismiss()
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AccountSection(
+    entry: AgentStatusEntry,
+    avatar: @Composable () -> Unit,
+    title: String,
+    subtitle: String?,
+    facts: List<String>,
+    actions: @Composable () -> Unit
+) {
+    val accent = entry.agent.accent()
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = accent.copy(alpha = 0.05f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.22f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                avatar()
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(title, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    subtitle?.let {
+                        Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                StatusChip(entry)
+            }
+            if (facts.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    facts.forEach { fact ->
+                        Text(
+                            fact,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { actions() }
+        }
+    }
+}
+
+@Composable
+private fun StatusChip(entry: AgentStatusEntry) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(entry.color.copy(alpha = 0.12f))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(6.dp).clip(CircleShape).background(entry.color))
+        Spacer(Modifier.width(5.dp))
+        Text(entry.label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = entry.color, maxLines = 1)
+    }
+}
+
+@Composable
+private fun SectionButton(
+    text: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    danger: Boolean = false,
+    primary: Color? = null,
+    onClick: () -> Unit
+) {
+    val color = when {
+        danger -> ai.intelli.theme.AppColors.danger
+        primary != null -> primary
+        else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+    }
+    if (primary != null) {
+        Surface(onClick = onClick, shape = RoundedCornerShape(12.dp), color = primary) {
+            Text(text, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = Color.White, modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp))
+        }
+        return
+    }
+    TextButton(onClick = onClick, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
+        icon?.let {
+            Icon(it, null, tint = color, modifier = Modifier.size(15.dp))
+            Spacer(Modifier.width(5.dp))
+        }
+        Text(text, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = color)
+    }
+}

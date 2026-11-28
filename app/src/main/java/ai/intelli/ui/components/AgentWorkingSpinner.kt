@@ -1,0 +1,189 @@
+package ai.intelli.ui.components
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import ai.intelli.i18n.L
+import ai.intelli.i18n.LocalLanguageVersion
+
+// The "working" row of the Claude Code VS Code extension: a pulsing star glyph and a playful verb that is "decoded"
+// in with a running cursor. Same glyphs, verbs and timings as the extension.
+
+private val GLYPHS = listOf("·", "✢", "*", "✶", "✻", "✽").let { it + it.reversed() }
+
+private val VERBS get() = listOf(
+    L.components.agentWorkingSpinner.accomplishing, L.components.agentWorkingSpinner.actioning, L.components.agentWorkingSpinner.actualizing, L.components.agentWorkingSpinner.baking, L.components.agentWorkingSpinner.booping, L.components.agentWorkingSpinner.brewing, L.components.agentWorkingSpinner.calculating, L.components.agentWorkingSpinner.cerebrating,
+    L.components.agentWorkingSpinner.channeling, L.components.agentWorkingSpinner.churning, L.components.agentWorkingSpinner.clauding, L.components.agentWorkingSpinner.coalescing, L.components.agentWorkingSpinner.cogitating, L.components.agentWorkingSpinner.computing, L.components.agentWorkingSpinner.combobulating, L.components.agentWorkingSpinner.concocting,
+    L.components.agentWorkingSpinner.considering, L.components.agentWorkingSpinner.contemplating, L.components.agentWorkingSpinner.cooking, L.components.agentWorkingSpinner.crafting, L.components.agentWorkingSpinner.creating, L.components.agentWorkingSpinner.crunching, L.components.agentWorkingSpinner.deciphering, L.components.agentWorkingSpinner.deliberating,
+    L.components.agentWorkingSpinner.determining, L.components.agentWorkingSpinner.discombobulating, L.components.agentWorkingSpinner.doing, L.components.agentWorkingSpinner.effecting, L.components.agentWorkingSpinner.elucidating, L.components.agentWorkingSpinner.enchanting, L.components.agentWorkingSpinner.envisioning, L.components.agentWorkingSpinner.finagling,
+    L.components.agentWorkingSpinner.flibbertigibbeting, L.components.agentWorkingSpinner.forging, L.components.agentWorkingSpinner.forming, L.components.agentWorkingSpinner.frolicking, L.components.agentWorkingSpinner.generating, L.components.agentWorkingSpinner.germinating, L.components.agentWorkingSpinner.hatching, L.components.agentWorkingSpinner.herding,
+    L.components.agentWorkingSpinner.honking, L.components.agentWorkingSpinner.ideating, L.components.agentWorkingSpinner.imagining, L.components.agentWorkingSpinner.incubating, L.components.agentWorkingSpinner.inferring, L.components.agentWorkingSpinner.manifesting, L.components.agentWorkingSpinner.marinating, L.components.agentWorkingSpinner.meandering,
+    L.components.agentWorkingSpinner.moseying, L.components.agentWorkingSpinner.mulling, L.components.agentWorkingSpinner.mustering, L.components.agentWorkingSpinner.musing, L.components.agentWorkingSpinner.noodling, L.components.agentWorkingSpinner.percolating, L.components.agentWorkingSpinner.perusing, L.components.agentWorkingSpinner.philosophizing,
+    L.components.agentWorkingSpinner.pontificating, L.components.agentWorkingSpinner.pondering, L.components.agentWorkingSpinner.processing, L.components.agentWorkingSpinner.puttering, L.components.agentWorkingSpinner.puzzling, L.components.agentWorkingSpinner.reticulating, L.components.agentWorkingSpinner.ruminating, L.components.agentWorkingSpinner.schlepping,
+    L.components.agentWorkingSpinner.shimmying, L.components.agentWorkingSpinner.simmering, L.components.agentWorkingSpinner.smooshing, L.components.agentWorkingSpinner.spelunking, L.components.agentWorkingSpinner.spinning, L.components.agentWorkingSpinner.stewing, L.components.agentWorkingSpinner.sussing, L.components.agentWorkingSpinner.synthesizing, L.common.thinking,
+    L.components.agentWorkingSpinner.tinkering, L.components.agentWorkingSpinner.transmuting, L.components.agentWorkingSpinner.unfurling, L.components.agentWorkingSpinner.unraveling, L.components.agentWorkingSpinner.vibing, L.components.agentWorkingSpinner.wandering, L.components.agentWorkingSpinner.whirring, L.components.agentWorkingSpinner.wibbling, L.components.agentWorkingSpinner.working,
+    L.components.agentWorkingSpinner.wrangling
+)
+
+/**
+ * The verbs one agent's working row picks from: "Clauding" only in a Claude chat, every other verb for every agent.
+ */
+private fun verbsFor(claude: Boolean): List<String> =
+    if (claude) VERBS else VERBS.filter { it != L.components.agentWorkingSpinner.clauding }
+
+/**
+ * Room for the longest verb (or "Compacting") plus "...", in the current language: the row never changes width.
+ * Worked out each time, not once: the language (and so the longest text) can change while the app runs.
+ */
+private fun textWidth() = (VERBS + L.components.agentWorkingSpinner.compacting2).maxOf { it.length } + 3
+
+/**
+ * The width (px) of the widest text the row can show, per text setup (density, font scale, language): the same for
+ * every working row, so it is measured once for the app's life. The word style is fixed (only its color changes).
+ */
+private val wordWidthCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+/** The glyphs laid out, per text setup and color (a handful of entries for the app's life). */
+private val glyphLayoutCache = java.util.concurrent.ConcurrentHashMap<String, List<androidx.compose.ui.text.TextLayoutResult>>()
+
+private const val GLYPH_STEP_MS = 120L
+private const val DECODE_FRAME_MS = 40L
+/** The verb changes after 2 s, then 3 s, then every 5 s. */
+private val WORD_DELAYS_MS = longArrayOf(2_000, 3_000)
+private const val WORD_DELAY_MS = 5_000L
+
+/**
+ * The agent is working.
+ *
+ * Built so a tick costs as little as possible: the row has one fixed size (tallest glyph, widest verb), so it
+ * never re-lays out the chat around it; the animation state is read only while drawing (no recomposition or
+ * layout per tick); and it draws in its own graphics layer, so only this row is repainted. Glyphs and text sit
+ * on fixed baselines, so nothing moves up and down when a glyph or character comes from another font.
+ */
+@Composable
+fun AgentWorkingSpinner(
+    color: Color,
+    modifier: Modifier = Modifier,
+    compacting: Boolean = false,
+    /** A Claude chat: "Clauding" is one of the verbs (other agents never show it). */
+    claude: Boolean = false
+) {
+    val measurer = rememberTextMeasurer(cacheSize = 64)
+    // a quiet status line (like VS Code's softened foreground); the accent-colored star is what draws the eye
+    val textColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+    val glyphStyle = remember(color) { TextStyle(color = color, fontSize = 21.sp, fontFamily = FontFamily.Monospace) }
+    val wordStyle = remember(textColor) { TextStyle(color = textColor, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
+    val density = LocalDensity.current
+    val language = LocalLanguageVersion.current
+
+    // measured once per text setup for the app's life (not each time the row appears: measuring every verb took
+    // 40-90 ms whenever a turn started or the row came back on screen): every glyph, and the widest text the row can
+    // show (again when the language, the text size or the screen density changes)
+    val setup = "${density.density}|${density.fontScale}|$language"
+    val glyphLayouts = remember(measurer, glyphStyle, setup) {
+        glyphLayoutCache.getOrPut("$setup|${glyphStyle.color}") { GLYPHS.map { measurer.measure(it, glyphStyle) } }
+    }
+    val wordRef = remember(measurer, wordStyle, language) { measurer.measure(L.components.agentWorkingSpinner.compacting, wordStyle) }
+    val wordWidth = remember(measurer, wordStyle, setup) {
+        wordWidthCache.getOrPut(setup) {
+            (VERBS + L.components.agentWorkingSpinner.compacting2).maxOf { measurer.measure("$it...", wordStyle).size.width } + measurer.measure("▌", wordStyle).size.width
+        }
+    }
+    val glyphBox = remember(glyphLayouts) { glyphLayouts.maxOf { it.size.width } }
+    val gapPx = with(density) { 4.dp.roundToPx() }
+    val heightPx = maxOf(glyphLayouts.maxOf { it.size.height }, wordRef.size.height)
+    val glyphBaseline = (heightPx - glyphLayouts[GLYPHS.indexOf("✻")].size.height) / 2f + glyphLayouts[GLYPHS.indexOf("✻")].firstBaseline
+    val wordBaseline = (heightPx - wordRef.size.height) / 2f + wordRef.firstBaseline
+
+    val glyphStep = remember { mutableIntStateOf(0) }
+    val shown = remember { mutableStateOf(" ".repeat(textWidth())) }
+    GlyphTicker(glyphStep)
+    WordDecoder(shown, compacting, language, claude)
+
+    Canvas(
+        modifier
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .size(with(density) { (glyphBox + gapPx + wordWidth).toDp() }, with(density) { heightPx.toDp() })
+            .graphicsLayer()
+    ) {
+        // state is read here only: a tick redraws this layer and nothing else
+        val glyph = glyphLayouts[glyphStep.intValue]
+        drawText(glyph, topLeft = Offset((glyphBox - glyph.size.width) / 2f, glyphBaseline - glyph.firstBaseline))
+        val word = measurer.measure(shown.value, wordStyle, softWrap = false, maxLines = 1)
+        drawText(word, topLeft = Offset((glyphBox + gapPx).toFloat(), wordBaseline - word.firstBaseline))
+    }
+}
+
+@Composable
+private fun GlyphTicker(step: androidx.compose.runtime.MutableIntState) {
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(GLYPH_STEP_MS)
+            step.intValue = (step.intValue + 1) % GLYPHS.size
+        }
+    }
+}
+
+@Composable
+private fun WordDecoder(shown: androidx.compose.runtime.MutableState<String>, compacting: Boolean, language: Int, claude: Boolean) {
+    var verb by remember { mutableStateOf(verbsFor(claude).random()) }
+    val claudeNow by androidx.compose.runtime.rememberUpdatedState(claude)
+    LaunchedEffect(Unit) {
+        var changes = 0
+        while (true) {
+            delay(WORD_DELAYS_MS.getOrElse(changes) { WORD_DELAY_MS })
+            changes++
+            verb = verbsFor(claudeNow).random()
+        }
+    }
+    // a new language (or another agent): a verb it can show right away, not after the next change
+    LaunchedEffect(language, claude) { if (verb !in verbsFor(claude)) verb = verbsFor(claude).random() }
+    // A cursor runs over the old text; the three characters behind it flicker through '.' and '_' before settling.
+    LaunchedEffect(verb, compacting, language) {
+        val target = ((if (compacting) L.components.agentWorkingSpinner.compacting2 else verb) + "...").padEnd(textWidth())
+        var cursor = 0
+        while (cursor - 3 < target.length) {
+            // the old text can be shorter or longer than the new one (it was in another language): cut or pad it to
+            // the new length, so every index the cursor writes exists
+            val next = StringBuilder(shown.value.take(target.length).padEnd(target.length))
+            for (behind in 0..3) {
+                val k = cursor - behind
+                if (k < 0 || k >= target.length) continue
+                val want = target[k]
+                next.setCharAt(
+                    k,
+                    when {
+                        want == ' ' -> ' '
+                        behind == 3 -> want
+                        behind == 0 -> '▌'
+                        else -> charArrayOf('.', '_', want).random()
+                    }
+                )
+            }
+            shown.value = next.toString()
+            cursor++
+            delay(DECODE_FRAME_MS)
+        }
+    }
+}

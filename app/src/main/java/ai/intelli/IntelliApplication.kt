@@ -1,0 +1,210 @@
+package ai.intelli
+
+import android.app.Application
+import android.content.Context
+import android.content.pm.PackageManager
+import android.content.pm.Signature
+import android.os.Build
+import android.widget.Toast
+import ai.intelli.data.adb.AdbConnectManager
+import ai.intelli.data.updater.PluginUpdateCheckWorker
+import ai.intelli.data.updater.UpdateCheckWorker
+import com.telemetrydeck.sdk.Signal
+import com.telemetrydeck.sdk.SignalCache
+import com.telemetrydeck.sdk.TelemetryDeck
+import com.telemetrydeck.sdk.TelemetryDeckSessionManagerProvider
+import com.telemetrydeck.sdk.TelemetryDeckSignalProcessor
+import java.io.File
+import java.security.MessageDigest
+import java.util.UUID
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import ai.intelli.i18n.L
+
+class IntelliApplication : Application(), coil.ImageLoaderFactory {
+    /**
+     * Images that live on the bridge (a server's files, attachments) need the security header, which Coil's
+     * default client does not send. Only requests to the bridge address get it.
+     */
+    override fun newImageLoader(): coil.ImageLoader {
+        val client = okhttp3.OkHttpClient.Builder().proxySelector(ai.intelli.data.remote.core.LocalDirectProxySelector)
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val bridge = ai.intelli.data.preferences.AuthPreferences.currentBridgeHttpUrl.toHttpUrlOrNull()
+                val sameServer = bridge != null && req.url.host == bridge.host && req.url.port == bridge.port
+                chain.proceed(
+                    if (sameServer) req.newBuilder()
+                        .header(ai.intelli.data.preferences.AuthPreferences.currentFramedHeader, "true")
+                        .apply { ai.intelli.data.preferences.AuthPreferences.edgeHeader()?.let { (n, v) -> header(n, v) } }
+                        .build()
+                    else req
+                )
+            }
+            .build()
+        return coil.ImageLoader.Builder(this)
+            .okHttpClient(client)
+            // decoded pictures kept for instant redraw: a share of the heap, not Coil's default quarter (with largeHeap
+            // that quarter of the large heap could hold well over 100 MB of chat screenshots)
+            .memoryCache { coil.memory.MemoryCache.Builder(this).maxSizePercent(IMAGE_MEMORY_SHARE).build() }
+            .build()
+    }
+
+    /**
+     * Android is short of memory, or the app went to the background: drops what can be rebuilt without the user
+     * noticing. The open chat keeps its parsed messages (its list stays smooth); other chats' parsed messages go, and
+     * the formatted-text / code caches shrink. Coil and the chat's web views trim themselves.
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        @Suppress("DEPRECATION")
+        val keep = when {
+            // in the background and Android wants memory back
+            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> 0.25f
+            // the app's screen was just left: only other chats go (coming back must stay instant)
+            level == android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> 1f
+            // on screen, but the phone is running low
+            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> 0.5f
+            else -> return
+        }
+        ai.intelli.ui.chat.ChatFeedCache.trimToCurrent()
+        if (keep < 1f) {
+            ai.intelli.ui.components.CodeBlockCache.trim(keep)
+            ai.intelli.ui.components.MarkdownTextCache.trim(keep)
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        // a crash opens the crash screen (with the report) instead of the app just vanishing
+        ai.intelli.crash.CrashHandler.install(this)
+        // the crash screen's own process needs none of the startup below
+        if (ai.intelli.crash.CrashHandler.isCrashProcess(this)) return
+        // loads the saved server addresses, Remote mode and the SSH key into memory before anything connects
+        ai.intelli.data.preferences.AuthPreferences(this)
+        // where chat pictures that arrive as data are kept as files (its trim runs in the background)
+        ai.intelli.data.media.InlineMediaStore.init(this)
+        // the chosen light / dark themes and the custom ones, before the first screen draws
+        ai.intelli.theme.ThemeManager.init(this)
+        // the app language (Settings → Language), from its cache, before the first screen draws
+        ai.intelli.i18n.LanguageManager.init(this)
+        UpdateCheckWorker.schedule(this)
+        PluginUpdateCheckWorker.schedule(this)
+        // mini app reminders and exact-time tasks: alarms again (Android may have dropped them), off the main thread
+        ai.intelli.data.miniapps.MiniAppScheduler.rearmAsync(this)
+        Thread { ai.intelli.ui.miniapps.MiniAppShortcuts.migrate(this) }.start()
+        // Reconnects adb when Wireless debugging turns back on (it gets a new port every time)
+        AdbConnectManager.init(this)
+        // ADB / Shizuku / root: which one Android Automation uses, and Shizuku's binder listeners
+        ai.intelli.data.adb.DeviceAccess.init(this)
+        // the rooted Ubuntu chroot runtime: its installs and which one is in use (no root call here)
+        ai.intelli.data.local.chroot.ChrootManager.init(this)
+        ai.intelli.data.ssh.SshSessionFactory.init(this)
+        // Connect to PC: the paired PCs and the one in use (AuthPreferences reads the latter on its own too)
+        ai.intelli.data.pc.PcConnect.init(this)
+        // the cloud project new Antigravity chats start in (Remote Agents), before the first chat is created
+        ai.intelli.data.agent.agy.AgyCloud.init(this)
+        // TelemetryDeck is disabled in Intelli until an Intelli-owned TelemetryDeck app ID is configured.
+        if (RELEASE_CERT_SHA256.isBlank()) return
+        // Forks build with their own key, so only official release APKs report real usage.
+        if (!BuildConfig.DEBUG && !isOfficialRelease()) return
+        TelemetryDeck.start(
+            this,
+            TelemetryDeck.Builder()
+                .appID("")
+                .namespace("ai.intelli")
+                .defaultUser(SimpleTelemetryId.getUniqueUserId(this))
+                .testMode(BuildConfig.DEBUG)
+                .showDebugLogs(BuildConfig.DEBUG)
+                // Only installs and updates are reported (the free plan counts every signal): nothing per app open,
+                // and no session tracking (the SDK's would send a signal per open and time how long the app is used)
+                .sendNewSessionBeganSignal(false)
+                .sessionProvider(NoSessionTracking())
+                // the SDK's own file cache crashes the app when storage is full (see SafeSignalCache)
+                .signalCache(SafeSignalCache(cacheDir))
+        )
+        reportInstallOrUpdate()
+    }
+
+    /**
+     * One signal per install ("App.installed") and per update ("App.updated"); TelemetryDeck adds the app version,
+     * Android version and device to it. The version last reported is remembered, so each one is sent only once.
+     */
+    private fun reportInstallOrUpdate() = runCatching {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        val version = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode
+        else @Suppress("DEPRECATION") info.versionCode.toLong()
+        val prefs = getSharedPreferences("telemetry_device_prefs", MODE_PRIVATE)
+        val reported = prefs.getLong("reported_version_code", -1L)
+        if (reported == version) return@runCatching
+        // nothing reported yet: a fresh install, or an update from a version that didn't report updates
+        val installed = reported == -1L && info.firstInstallTime == info.lastUpdateTime
+        val params = if (reported == -1L) emptyMap() else mapOf("previousVersionCode" to reported.toString())
+        TelemetryDeck.signal(if (installed) "App.installed" else "App.updated", params, null, null)
+        prefs.edit().putLong("reported_version_code", version).apply()
+    }
+
+    /** Session tracking that does nothing: keeps one session ID per app start, sends no signals. */
+    private class NoSessionTracking : TelemetryDeckSessionManagerProvider {
+        private var sessionId: UUID = UUID.randomUUID()
+        override fun register(ctx: Context?, client: TelemetryDeckSignalProcessor) {}
+        override fun stop() {}
+        override fun getCurrentSessionID(): UUID = sessionId
+        override fun startNewSession(sessionID: UUID) { sessionId = sessionID }
+        override fun setFirstSessionID(sessionID: UUID) { sessionId = sessionID }
+    }
+
+    /**
+     * Stands in for the SDK's PersistentSignalCache, which writes cache/telemetrydeck.json at start and on every send
+     * tick without catching errors: with storage full (ENOSPC) its background timer threw and crashed the app.
+     * Same file and format (signals queued by older versions are still sent), but a failed read or write is ignored
+     * (the signals stay in memory), and the file is written only when the queue changes.
+     */
+    private class SafeSignalCache(dir: File) : SignalCache {
+        private val file = File(dir, "telemetrydeck.json")
+        private val serializer = ListSerializer(Signal.serializer())
+        private val queue: MutableList<Signal> =
+            runCatching { Json.decodeFromString(serializer, file.readText()) }.getOrDefault(emptyList()).toMutableList()
+
+        @Synchronized override fun add(signal: Signal) {
+            queue += signal
+            save()
+        }
+
+        @Synchronized override fun empty(): List<Signal> {
+            if (queue.isEmpty()) return emptyList()
+            val all = queue.toList()
+            queue.clear()
+            save()
+            return all
+        }
+
+        @Synchronized override fun count(): Int = queue.size
+
+        private fun save() {
+            runCatching { file.writeText(Json.encodeToString(serializer, queue)) }
+        }
+    }
+
+    private fun isOfficialRelease(): Boolean = runCatching {
+        val signatures: Array<Signature>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val info = packageManager.getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES).signingInfo ?: return false
+            if (info.hasMultipleSigners()) info.apkContentsSigners else info.signingCertificateHistory
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, PackageManager.GET_SIGNATURES).signatures
+        }
+        signatures.orEmpty().any { sig ->
+            MessageDigest.getInstance("SHA-256").digest(sig.toByteArray())
+                .joinToString("") { "%02X".format(it) } == RELEASE_CERT_SHA256
+        }
+    }.getOrDefault(false)
+
+    private companion object {
+        // SHA-256 of the release.jks certificate (alias "intelli"). Blank disables TelemetryDeck reporting.
+        const val RELEASE_CERT_SHA256 = ""
+    }
+}
+
+/** Share of the app's memory class Coil may use for decoded images (its default is 0.25). */
+private const val IMAGE_MEMORY_SHARE = 0.15
